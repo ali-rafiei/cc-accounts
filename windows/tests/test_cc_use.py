@@ -1,6 +1,10 @@
+import http.client
+import http.server
 import json
 import os
+import threading
 import time
+from contextlib import contextmanager
 
 import pytest
 
@@ -334,3 +338,205 @@ def test__lock_dir__gives_up_on_a_live_lock(tmp_path, monkeypatch):
         with cc_use._lock_dir(lock, stale_s=60):
             pass
     assert lock.is_dir()
+
+
+def test__load__writes_the_account_record_before_the_stash(machine, monkeypatch):
+    # Arrange: uninstall runs `forget` off these files, so no stash may exist without its record.
+    real_write = cc_use._write_private
+
+    def write_private(path, text):
+        if path == machine['profiles'] / '.home-account.json':
+            raise OSError(28, 'No space left on device')
+        real_write(path, text)
+
+    monkeypatch.setattr(cc_use, '_write_private', write_private)
+
+    # Act
+    with pytest.raises(OSError):
+        cc_use.load('work')
+
+    # Assert
+    assert not machine['stash'].exists()
+
+
+def test__load__sees_a_session_started_while_waiting_for_the_lock(machine, monkeypatch):
+    # Arrange: `cc work` starts a session between cc-use's first look and the swap.
+    sessions = machine['profiles'] / 'work' / 'sessions'
+    sessions.mkdir()
+    _on_lock(monkeypatch, lambda: (sessions / f'{os.getpid()}.json').write_text('{}'))
+
+    # Act / Assert
+    with pytest.raises(cc_use.SwapError, match='running session'):
+        cc_use.load('work')
+    assert machine['default'].read_text() == HOME_SECRET
+
+
+def test__load__moves_the_incoming_login_as_it_stands_under_the_lock(machine, monkeypatch):
+    # Arrange: a work session refreshes (rotates) work's own token and exits before the lock is taken.
+    rotated = json.dumps({'claudeAiOauth': {'accessToken': 'work-at-2', 'refreshToken': 'work-rt-2'}})
+    _on_lock(monkeypatch, lambda: (machine['profiles'] / 'work' / '.credentials.json').write_text(rotated))
+
+    # Act
+    cc_use.load('work')
+
+    # Assert
+    assert machine['default'].read_text() == rotated
+
+
+def test__fetch_identity__refuses_a_redirect_and_keeps_the_token(monkeypatch):
+    # Arrange: a local stand-in for the profile endpoint that redirects elsewhere.
+    _RedirectingProfileServer.seen_auth = []
+    server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), _RedirectingProfileServer)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    monkeypatch.setattr(cc_use, 'PROFILE_URL', f'http://127.0.0.1:{server.server_port}/profile')
+
+    # Act
+    try:
+        identity = cc_use._fetch_identity('secret-token')
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    # Assert
+    assert identity is None
+    assert _RedirectingProfileServer.seen_auth == []
+
+
+@pytest.mark.parametrize(
+    'failure',
+    [http.client.IncompleteRead(b'{'), ConnectionResetError(10054, 'reset'), None],
+    ids=['incomplete', 'reset', 'bad-utf8'],
+)
+def test__fetch_identity__treats_a_broken_response_as_unknown(monkeypatch, failure):
+    # Arrange: the request goes out, but the answer never arrives whole.
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            if failure is None:
+                return b'\xff\xfe'
+            raise failure
+
+    opener = type('Opener', (), {'open': lambda self, request, timeout: Response()})()
+    monkeypatch.setattr(cc_use.urllib.request, 'build_opener', lambda *handlers: opener)
+
+    # Act / Assert
+    assert cc_use._fetch_identity('token') is None
+
+
+def test__status__treats_a_null_oauth_account_as_no_account(machine):
+    # Arrange
+    machine['global_config'].write_text(json.dumps({'oauthAccount': None}))
+
+    # Act / Assert
+    assert cc_use.status() == 'default slot: default (None)'
+
+
+@pytest.mark.parametrize('online', [True, False], ids=['online', 'offline'])
+def test__load__refuses_a_default_login_with_no_oauth_account(machine, online):
+    # Arrange
+    machine['global_config'].write_text(json.dumps({'oauthAccount': None}))
+    if not online:
+        machine['identities'].clear()
+
+    # Act / Assert
+    with pytest.raises(cc_use.SwapError, match='oauthAccount|not swapping'):
+        cc_use.load('work')
+    assert machine['default'].read_text() == HOME_SECRET
+    assert not machine['stash'].exists()
+    assert not (machine['profiles'] / '.home-account.json').exists()
+
+
+def test__forget__refuses_when_the_slot_holds_another_account(machine):
+    # Arrange: the stash is the only copy of the user's login, and .loaded never got written.
+    _killed_mid_swap(machine, HOME_ACCOUNT)
+
+    # Act / Assert
+    with pytest.raises(cc_use.SwapError, match=r'recorded default \(me@example.com\); not deleting'):
+        cc_use.forget()
+    assert machine['stash'].read_text() == HOME_SECRET
+    assert (machine['profiles'] / '.home-account.json').exists()
+
+
+def test__forget__offline_refuses_when_the_slot_login_is_not_the_stashed_one(machine):
+    # Arrange
+    _killed_mid_swap(machine, HOME_ACCOUNT)
+    machine['identities'].clear()
+
+    # Act / Assert
+    with pytest.raises(cc_use.SwapError, match='could not confirm'):
+        cc_use.forget()
+    assert machine['stash'].read_text() == HOME_SECRET
+
+
+def test__forget__refuses_while_the_slot_is_empty(machine):
+    # Arrange: a stash, and no login in the default slot at all.
+    cc_use.load('work')
+    cc_use.load(None)
+    machine['default'].unlink()
+
+    # Act / Assert
+    with pytest.raises(cc_use.SwapError, match='holds no login'):
+        cc_use.forget()
+    assert machine['stash'].read_text() == HOME_SECRET
+
+
+def test__load__refuses_to_overwrite_the_stash_with_a_profile_login(machine):
+    # Arrange: the killed swap also wrote work's account into ~/.claude.json, so it looks consistent.
+    _killed_mid_swap(machine, WORK_ACCOUNT)
+    other = machine['profiles'] / 'other'
+    other.mkdir()
+    (other / '.claude.json').write_text(json.dumps({'oauthAccount': {'accountUuid': 'uuid-other'}}))
+    (other / '.credentials.json').write_text(json.dumps({'claudeAiOauth': {'accessToken': 'other-at'}}))
+
+    # Act / Assert: the refusal names the two files to delete if the stash really is stale.
+    with pytest.raises(cc_use.SwapError, match=r'recorded default \(me@example.com\); not swapping') as refused:
+        cc_use.load('other')
+    assert str(machine['stash']) in str(refused.value)
+    assert str(machine['profiles'] / '.home-account.json') in str(refused.value)
+    assert machine['stash'].read_text() == HOME_SECRET
+
+
+class _RedirectingProfileServer(http.server.BaseHTTPRequestHandler):
+    seen_auth: list = []
+
+    def do_GET(self):
+        if self.path == '/profile':
+            self.send_response(302)
+            self.send_header('Location', '/elsewhere')
+            self.end_headers()
+            return
+        _RedirectingProfileServer.seen_auth.append(self.headers.get('Authorization'))
+        body = json.dumps({'account': {'uuid': 'uuid-x', 'email': 'x@example.com'}}).encode()
+        self.send_response(200)
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+def _on_lock(monkeypatch, action):
+    """Run `action` as the credential locks are taken, i.e. after every check made before them."""
+    real_lock = cc_use._credentials_lock
+
+    @contextmanager
+    def lock():
+        with real_lock():
+            action()
+            yield
+
+    monkeypatch.setattr(cc_use, '_credentials_lock', lock)
+
+
+def _killed_mid_swap(machine, config_account):
+    """The state a swap to work leaves when killed after the slot write and before .loaded."""
+    machine['stash'].write_text(HOME_SECRET)
+    (machine['profiles'] / '.home-account.json').write_text(json.dumps(HOME_ACCOUNT))
+    machine['default'].write_text(WORK_SECRET)
+    machine['global_config'].write_text(json.dumps({'oauthAccount': config_account}))
