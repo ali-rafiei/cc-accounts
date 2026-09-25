@@ -651,3 +651,24 @@ def test__load__decomposed_name_of_the_loaded_profile_does_not_swap_it_again(mac
     # Assert: the live, rotated login stays in the slot rather than being swapped for the stale copy.
     assert machine['keychain'][cc_use.DEFAULT_SERVICE] == rotated
     assert cc_use.loaded_profile() == composed
+
+
+def test__load__default_restores_after_loading_a_name_with_edge_spaces(machine):
+    # Arrange: `cc` accepts " work " as its own folder, and .loaded must name it exactly.
+    other_secret = json.dumps({'claudeAiOauth': {'accessToken': 'other-at', 'refreshToken': 'other-rt'}})
+    spaced = machine['profiles'] / ' work '
+    spaced.mkdir()
+    spaced.joinpath('.claude.json').write_text(
+        json.dumps({'oauthAccount': {'accountUuid': 'uuid-other', 'emailAddress': 'other@example.com'}})
+    )
+    machine['keychain'][cc_use._owner_service(' work ')] = other_secret
+    machine['identities']['other-at'] = 'uuid-other'
+    cc_use.load(' work ')
+
+    # Act
+    cc_use.load(None)
+
+    # Assert
+    assert machine['keychain'][cc_use.DEFAULT_SERVICE] == HOME_SECRET
+    assert machine['keychain'][cc_use._owner_service('work')] == WORK_SECRET
+    assert cc_use.loaded_profile() is None

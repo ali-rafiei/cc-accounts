@@ -173,7 +173,7 @@ def forget() -> str:
 
 def loaded_profile() -> str | None:
     try:
-        return LOADED_FILE.read_text().strip() or None
+        return LOADED_FILE.read_text().rstrip('\n') or None  # only the newline: cc compares the name exactly
     except FileNotFoundError:
         return None
 

@@ -67,6 +67,18 @@ def test__discover__probes_the_loaded_profile_through_the_default_login(profiles
     assert config_dirs['personal'] == profiles / 'personal'
 
 
+def test__discover__probes_a_loaded_name_with_edge_spaces_through_the_default_login(profiles):
+    # Arrange: cc-use records the folder name exactly, spaces and all.
+    (profiles / 'work ').mkdir()
+    (profiles / '.loaded').write_text('work \n')
+
+    # Act
+    config_dirs = dict(usage_table._discover())
+
+    # Assert
+    assert config_dirs['work '] is None
+
+
 def test__parse_reset__resolves_a_date_to_the_coming_weekday():
     # Arrange
     target = (datetime.now() + timedelta(days=30)).replace(hour=15, minute=0, second=0, microsecond=0)

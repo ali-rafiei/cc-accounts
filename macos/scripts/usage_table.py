@@ -104,7 +104,7 @@ def _current_account() -> str | None:
 def _loaded_profile() -> str | None:
     """The profile cc-use has put in the default slot, if any."""
     try:
-        return (PROFILES_DIR / '.loaded').read_text().strip() or None
+        return (PROFILES_DIR / '.loaded').read_text().rstrip('\n') or None  # exact, as cc compares it
     except FileNotFoundError:
         return None
 
