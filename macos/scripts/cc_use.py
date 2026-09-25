@@ -11,15 +11,17 @@ follow claude-swap (MIT, github.com/realiti4/claude-swap).
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import os
 import random
+import re
 import subprocess
 import sys
 import tempfile
 import threading
 import time
-import urllib.error
+import unicodedata
 import urllib.request
 from contextlib import contextmanager
 from pathlib import Path
@@ -65,6 +67,13 @@ class SwapError(Exception):
     """A swap refused or failed before it could leave the slot half-changed."""
 
 
+class _RefuseRedirect(urllib.request.HTTPRedirectHandler):
+    """urllib would re-send the Bearer token to wherever a redirect points; a 3xx becomes an HTTPError instead."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 def main(argv: list[str]) -> int:
     if argv and argv[0] in ('-h', '--help'):
         print(USAGE)
@@ -89,7 +98,7 @@ def main(argv: list[str]) -> int:
 
 
 def status() -> str:
-    email = _read_json(GLOBAL_CONFIG).get('oauthAccount', {}).get('emailAddress')
+    email = (_read_json(GLOBAL_CONFIG).get('oauthAccount') or {}).get('emailAddress')
     return f'default slot: {_label(loaded_profile())} ({email})'
 
 
@@ -99,27 +108,45 @@ def load(target: str | None) -> str:
         return f'{_label(target)} is already in the default slot'
     if target is not None:
         _require_profile(target)
-        _refuse_if_running(target)
     current = _keychain_get(DEFAULT_SERVICE)
     if current is None:
         raise SwapError('the default slot holds no login; run `claude auth login` first')
     _verify_owner(current, owner)
-    incoming = _keychain_get(_owner_service(target))
-    if incoming is None:
-        raise SwapError(f'{target} is not logged in (cc-login {target})' if target else 'no stashed login to restore')
-    incoming_account = _profile_account(target) if target else _read_json(HOME_ACCOUNT_FILE)
 
     with _credentials_lock(), _config_lock():
         if _keychain_get(DEFAULT_SERVICE) != current:
             raise SwapError('a session refreshed the default login mid-swap; retry')
+        # Checked under the lock, so a `cc <profile>` started, or a refresh made, since cc-use began is seen.
+        if target is not None:
+            _refuse_if_running(target)
+        incoming = _keychain_get(_owner_service(target))
+        if incoming is None:
+            raise SwapError(
+                f'{target} is not logged in (cc-login {target})' if target else 'no stashed login to restore'
+            )
+        incoming_account = _profile_account(target) if target else _read_json(HOME_ACCOUNT_FILE)
         config = _read_json(GLOBAL_CONFIG)
-        _keychain_set(_owner_service(owner), current)
+        # The record goes first: uninstall runs `forget` only when it exists, so no stash may outlive it.
         if owner is None:
-            _write_json(HOME_ACCOUNT_FILE, config['oauthAccount'])
-        _keychain_set(DEFAULT_SERVICE, incoming)
-        config['oauthAccount'] = incoming_account
-        _write_json(GLOBAL_CONFIG, config)
-        _write_loaded(target)
+            home_account = config.get('oauthAccount')
+            if not isinstance(home_account, dict) or not home_account:
+                raise SwapError(f'{GLOBAL_CONFIG} records no oauthAccount for the default login; not swapping')
+            _write_json(HOME_ACCOUNT_FILE, home_account)
+        _keychain_set(_owner_service(owner), current)
+        # From here on the slot, ~/.claude.json and .loaded must change together; a
+        # half-done swap would make _verify_owner refuse every later run.
+        config_written = False
+        try:
+            _keychain_set(DEFAULT_SERVICE, incoming)
+            _write_json(GLOBAL_CONFIG, {**config, 'oauthAccount': incoming_account})
+            config_written = True
+            _write_loaded(target)
+        except BaseException:
+            _keychain_set(DEFAULT_SERVICE, current)
+            if config_written:
+                _write_json(GLOBAL_CONFIG, config)
+                _write_loaded(owner)
+            raise
 
     return (
         f'default slot: {_label(owner)} -> {_label(target)} '
@@ -133,6 +160,12 @@ def forget() -> str:
     loaded = loaded_profile()
     if loaded is not None:
         raise SwapError(f'{loaded} is loaded, so the stash holds your only login; run `cc-use default` first')
+    # A swap killed before it wrote .loaded leaves a profile in the slot and your login only in the stash.
+    if _keychain_get(HOME_STASH_SERVICE) is not None:
+        current = _keychain_get(DEFAULT_SERVICE)
+        if current is None:
+            raise SwapError('the default slot holds no login, so the stash is your only copy; not deleting it')
+        _verify_owner(current, None, doing='deleting the stash')
     _keychain_delete(HOME_STASH_SERVICE)
     HOME_ACCOUNT_FILE.unlink(missing_ok=True)
     return 'deleted the stashed copy of your login; your default login is untouched'
@@ -153,12 +186,15 @@ def _owner_service(profile: str | None) -> str:
     """Where a login lives while it is out of the slot: its profile's own item, or the stash."""
     if profile is None:
         return HOME_STASH_SERVICE
-    digest = hashlib.sha256(str(PROFILES_DIR / profile).encode()).hexdigest()[:8]
+    config_dir = unicodedata.normalize('NFC', str(PROFILES_DIR / profile))  # Claude Code hashes the NFC form
+    digest = hashlib.sha256(config_dir.encode()).hexdigest()[:8]
     return f'{DEFAULT_SERVICE}-{digest}'
 
 
 def _require_profile(name: str) -> None:
-    if name in RESERVED_NAMES or name[:1] in ('.', '_') or not (PROFILES_DIR / name).is_dir():
+    # A name with a slash ("work/") finds the same dir, but .loaded would then not match the name `cc` compares.
+    malformed = not name or '/' in name or name[:1] in ('.', '_')
+    if malformed or name in RESERVED_NAMES or not (PROFILES_DIR / name).is_dir():
         raise SwapError(f'no such profile: {name}')
 
 
@@ -185,27 +221,38 @@ def _alive(pid: int) -> bool:
     return True
 
 
-def _verify_owner(current: str, owner: str | None) -> None:
+def _verify_owner(current: str, owner: str | None, doing: str = 'swapping') -> None:
     """Refuse when the slot's login is not the account cc-use last put there.
 
     Writing it back would otherwise hand one account's login to another's profile.
     """
-    expected = _profile_account(owner) if owner else _read_json(GLOBAL_CONFIG).get('oauthAccount', {})
+    stored = _keychain_get(_owner_service(owner))
+    expected = _profile_account(owner) if owner else _home_account(stored)
     identity = _fetch_identity(_oauth(current).get('accessToken'))
     if identity is not None:
         if identity['uuid'] != expected.get('accountUuid'):
             raise SwapError(
                 f'the default slot holds {identity["email"]}, but cc-use recorded '
-                f'{_label(owner)} ({expected.get("emailAddress")}); not swapping'
+                f'{_label(owner)} ({expected.get("emailAddress")}); not {doing}'
             )
         return
-    stored = _keychain_get(_owner_service(owner))
     if stored is None or _oauth(stored).get('refreshToken') == _oauth(current).get('refreshToken'):
         return
     raise SwapError(
         'could not confirm whose login is in the default slot (offline, or its '
         'access token expired); send one message in any default session, then retry'
     )
+
+
+def _home_account(stash: str | None) -> dict:
+    """The user's own account: the stash's record once there is a stash.
+
+    ~/.claude.json is not proof, since a swap killed before .loaded may already have
+    written the loaded profile's account there.
+    """
+    if stash is not None and HOME_ACCOUNT_FILE.exists():
+        return _read_json(HOME_ACCOUNT_FILE)
+    return _read_json(GLOBAL_CONFIG).get('oauthAccount') or {}
 
 
 def _fetch_identity(access_token: str | None) -> dict | None:
@@ -215,9 +262,10 @@ def _fetch_identity(access_token: str | None) -> dict | None:
         PROFILE_URL, headers={'Authorization': f'Bearer {access_token}', 'Content-Type': 'application/json'}
     )
     try:
-        with urllib.request.urlopen(request, timeout=5) as response:
+        with urllib.request.build_opener(_RefuseRedirect).open(request, timeout=5) as response:
             body = json.loads(response.read().decode())
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
+    # OSError covers URLError, timeouts and a reset mid-read; ValueError covers bad JSON and bad UTF-8.
+    except (OSError, ValueError, http.client.HTTPException):
         return None
     account = body.get('account') if isinstance(body, dict) else None
     if not isinstance(account, dict) or not account.get('uuid'):
@@ -249,9 +297,14 @@ def _write_loaded(profile: str | None) -> None:
 def _read_json(path: Path) -> dict:
     try:
         with path.open() as fh:
-            return json.load(fh)
+            data = json.load(fh)
     except FileNotFoundError as exc:
         raise SwapError(f'missing {path}') from exc
+    except json.JSONDecodeError as exc:
+        raise SwapError(f'{path} is not valid JSON ({exc}); not touching it') from exc
+    if not isinstance(data, dict):
+        raise SwapError(f'{path} holds {type(data).__name__}, not a JSON object; not touching it')
+    return data
 
 
 def _write_json(path: Path, data: dict) -> None:
@@ -269,8 +322,12 @@ def _write_json(path: Path, data: dict) -> None:
 
 
 def _keychain_account() -> str:
-    """The account name Claude Code files its Keychain items under: $USER, else the login name."""
-    return os.environ.get('USER') or pwd.getpwuid(os.geteuid()).pw_name
+    """The account name Claude Code files its Keychain items under: $USER, else the login name.
+
+    Claude Code substitutes a fixed name for one outside [a-zA-Z0-9._-].
+    """
+    name = os.environ.get('USER') or pwd.getpwuid(os.geteuid()).pw_name
+    return name if re.fullmatch(r'[a-zA-Z0-9._-]+', name) else 'claude-code-user'
 
 
 def _keychain_get(service: str) -> str | None:
@@ -307,6 +364,8 @@ def _security(args: list[str], stdin: str | None = None) -> subprocess.Completed
         )
     except subprocess.TimeoutExpired as exc:
         raise SwapError(f'Keychain did not answer within {KEYCHAIN_TIMEOUT_S}s (locked?)') from exc
+    except OSError as exc:
+        raise SwapError(f'could not run {SECURITY}: {exc}') from exc
 
 
 @contextmanager
@@ -339,14 +398,14 @@ def _lock_dir(path: Path, stale_s: float):
             held_for = time.time() - path.stat().st_mtime
         except FileNotFoundError:
             continue
+        if time.monotonic() > deadline:
+            raise SwapError(f'{path.name} stayed held (Claude Code is refreshing a login); retry shortly')
         if held_for > stale_s:
             try:
                 os.rmdir(path)
             except OSError:
                 time.sleep(0.05)
             continue
-        if time.monotonic() > deadline:
-            raise SwapError(f'{path.name} stayed held (Claude Code is refreshing a login); retry shortly')
         time.sleep(0.25 + random.random() * 0.25)
 
     stop = threading.Event()
