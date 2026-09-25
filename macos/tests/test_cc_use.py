@@ -336,3 +336,27 @@ def test__load__failed_loaded_write_puts_the_slot_and_config_back(machine, monke
     # Assert
     assert machine['keychain'][cc_use.DEFAULT_SERVICE] == HOME_SECRET
     assert json.loads(machine['global_config'].read_text())['oauthAccount'] == HOME_ACCOUNT
+
+
+@pytest.mark.parametrize('content', ['', '{"oauthAccount": ', '[]', 'null'])
+def test__status__reports_a_corrupt_global_config_as_a_swap_error(machine, content):
+    # Arrange
+    machine['global_config'].write_text(content)
+
+    # Act / Assert
+    with pytest.raises(cc_use.SwapError, match='.claude.json'):
+        cc_use.status()
+
+
+def test__load__default_refuses_a_non_object_account_record_before_writing(machine):
+    # Arrange: work is loaded and the stashed account record is a JSON list, not an object.
+    cc_use.load('work')
+    (machine['profiles'] / '.home-account.json').write_text('[]')
+
+    # Act
+    with pytest.raises(cc_use.SwapError, match='home-account'):
+        cc_use.load(None)
+
+    # Assert
+    assert machine['keychain'][cc_use.DEFAULT_SERVICE] == WORK_SECRET
+    assert json.loads(machine['global_config'].read_text())['oauthAccount'] == WORK_ACCOUNT

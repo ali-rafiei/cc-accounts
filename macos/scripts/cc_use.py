@@ -264,9 +264,14 @@ def _write_loaded(profile: str | None) -> None:
 def _read_json(path: Path) -> dict:
     try:
         with path.open() as fh:
-            return json.load(fh)
+            data = json.load(fh)
     except FileNotFoundError as exc:
         raise SwapError(f'missing {path}') from exc
+    except json.JSONDecodeError as exc:
+        raise SwapError(f'{path} is not valid JSON ({exc}); not touching it') from exc
+    if not isinstance(data, dict):
+        raise SwapError(f'{path} holds {type(data).__name__}, not a JSON object; not touching it')
+    return data
 
 
 def _write_json(path: Path, data: dict) -> None:
