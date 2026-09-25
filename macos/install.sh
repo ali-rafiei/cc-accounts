@@ -70,7 +70,12 @@ uninstall() {
     exit 1
   fi
   if [[ -f "$dest/.home-account.json" && "$(uname)" == Darwin ]]; then
-    python3 "$dest/cc_use.py" forget
+    # forget refuses whenever it can't prove the stash is a spare copy. Keeping it is the
+    # safe side, so uninstall carries on and says how to drop it later.
+    if ! python3 "$dest/cc_use.py" forget; then
+      echo "kept cc-use's stashed copy of your login (reason above). It is harmless; to delete it later:"
+      echo "  security delete-generic-password -s 'Claude Code-credentials-cc-use-home'; rm '$dest/.home-account.json'"
+    fi
   fi
   local file skill
   for file in "${scripts[@]}"; do

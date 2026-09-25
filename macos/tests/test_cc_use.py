@@ -593,6 +593,20 @@ def test__forget__offline_refuses_when_the_slot_login_is_not_the_stashed_one(mac
     assert machine['keychain'][cc_use.HOME_STASH_SERVICE] == HOME_SECRET
 
 
+def test__load__names_the_way_out_when_the_stash_no_longer_matches_your_login(machine):
+    # Arrange: a killed swap left work in the slot while the stash still holds your own login.
+    _killed_mid_swap(machine, WORK_ACCOUNT)
+
+    # Act
+    with pytest.raises(cc_use.SwapError) as refused:
+        cc_use.load('work')
+
+    # Assert: the refusal must say how to get unstuck without reading the source.
+    message = str(refused.value)
+    assert 'security delete-generic-password' in message
+    assert cc_use.HOME_STASH_SERVICE in message
+
+
 def test__load__refuses_to_overwrite_the_stash_with_a_profile_login(machine):
     # Arrange: the killed swap also wrote work's account into ~/.claude.json, so it looks consistent.
     _killed_mid_swap(machine, WORK_ACCOUNT)

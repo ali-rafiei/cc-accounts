@@ -34,7 +34,12 @@ On a `cc-use:` error, relay the line; it names the cause. The refusals are delib
 - **A running session on that profile**: two live copies of one login strand one of them.
   The user exits it, or picks another profile.
 - **The default slot holds a different account than recorded**: something wrote the login
-  behind cc-use's back. Do not force it; tell the user and stop.
+  behind cc-use's back. Do not force it; tell the user and stop. When the message ends with a
+  `security delete-generic-password ...` command, the user's own login changed since cc-use
+  stashed it; that command is for the user to run if they changed it on purpose, never for
+  you to run for them.
+- **`forget` refuses**: it keeps the stash whenever it can't prove the default slot holds the
+  user's own login again. That is the safe side; relay the reason.
 - **Could not confirm whose login it is**: offline, or an expired access token. One message
   in any default session refreshes it; then retry.
 

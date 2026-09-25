@@ -231,10 +231,17 @@ def _verify_owner(current: str, owner: str | None, doing: str = 'swapping') -> N
     identity = _fetch_identity(_oauth(current).get('accessToken'))
     if identity is not None:
         if identity['uuid'] != expected.get('accountUuid'):
-            raise SwapError(
+            message = (
                 f'the default slot holds {identity["email"]}, but cc-use recorded '
                 f'{_label(owner)} ({expected.get("emailAddress")}); not {doing}'
             )
+            if owner is None and stored is not None:
+                message += (
+                    '. If you signed the default login in as a different account on purpose, drop the old '
+                    f"stash and retry: security delete-generic-password -s '{HOME_STASH_SERVICE}'; "
+                    f"rm '{HOME_ACCOUNT_FILE}'"
+                )
+            raise SwapError(message)
         return
     if stored is None or _oauth(stored).get('refreshToken') == _oauth(current).get('refreshToken'):
         return

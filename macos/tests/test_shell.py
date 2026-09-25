@@ -373,6 +373,23 @@ def test__install__adds_the_line_when_zshrc_only_has_it_commented_out(tmp_path):
     assert '# claude-multi-account' in (tmp_path / '.zshrc').read_text()
 
 
+def test__uninstall__keeps_going_when_forget_refuses(home):
+    # Arrange: cc-use has a stash, and forget refuses (a stub stands in for cc_use.py so the
+    # real Keychain is never touched).
+    dest = home / '.claude-profiles'
+    (dest / '.home-account.json').write_text('{}')
+    (dest / 'cc_use.py').write_text('import sys\nprint("cc-use: not deleting it", file=sys.stderr)\nsys.exit(1)\n')
+
+    # Act
+    done = _run(['bash', str(REPO / 'install.sh'), '--uninstall'], home, check=False)
+
+    # Assert
+    assert done.returncode == 0, done.stdout
+    assert not (dest / 'profiles.zsh').exists()
+    assert '# claude-multi-account' not in (home / '.zshrc').read_text()
+    assert 'security delete-generic-password' in done.stdout
+
+
 def _zsh(command: str, home: Path, check: bool = True, extra_env: dict[str, str] | None = None) -> str:
     script = f'source "$HOME/.zshrc"; {CLAUDE_STUB}; {command}'
     return _run(['zsh', '-c', script], home, check=check, extra_env=extra_env).stdout.strip()

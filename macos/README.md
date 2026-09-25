@@ -147,8 +147,10 @@ cc-use default            # if a profile is loaded; uninstall refuses otherwise
 ./install.sh --uninstall  # from the clone's macos folder
 ```
 
-That removes the scripts, the `~/.zshrc` line and any skill links from `--skills`, and on
-macOS deletes the copy of your login that `cc-use` kept in the Keychain. If you installed
+That removes the scripts, the `~/.zshrc` line and any skill links from `--skills`. It also
+deletes the spare copy of your login that `cc-use` kept in the Keychain, once it can confirm
+your own login is back in the default slot; if it can't (offline, say), it keeps the copy,
+which is harmless, and prints the command to delete it later. If you installed
 the skills as a plugin, remove it from inside Claude Code too:
 
 ```text
