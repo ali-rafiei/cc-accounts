@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace-manifest.json",
+  "name": "claude-multi-account",
+  "owner": {
+    "name": "Ali Rafiei",
+    "url": "https://github.com/ali-rafiei"
+  },
+  "description": "claude-multi-account for macOS and for Windows: install the plugin for your OS.",
+  "plugins": [
+    {
+      "name": "claude-multi-account-macos",
+      "source": "./macos",
+      "description": "macOS: per-account profiles, a usage table across all of them, one-shot prompts as another account, and swapping which account VS Code uses.",
+      "license": "MIT",
+      "keywords": [
+        "accounts",
+        "profiles",
+        "usage",
+        "rate-limits",
+        "vscode",
+        "macos"
+      ]
+    },
+    {
+      "name": "claude-multi-account-windows",
+      "source": "./windows",
+      "description": "Windows (PowerShell and Git Bash): per-account profiles, a usage table across all of them, one-shot prompts as another account, and swapping which account VS Code uses.",
+      "license": "MIT",
+      "keywords": [
+        "accounts",
+        "profiles",
+        "usage",
+        "rate-limits",
+        "vscode",
+        "windows"
+      ]
+    }
+  ]
+}

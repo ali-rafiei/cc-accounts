@@ -1,0 +1,49 @@
+# claude-multi-account
+
+Run Claude Code as several accounts on one machine. Each account gets its own profile, one
+command shows usage across all of them, Claude can hand a task to another account, and you
+can switch which account VS Code runs as without reloading anything.
+
+Written for people who have more than one Claude subscription or seat (personal and work,
+or several team seats) and want to use whichever one has room left this week.
+
+```text
+ACCOUNT               PROFILE           SESSION  WEEK  OTHER LIMITS  WEEK RESETS
+--------------------  ----------------  -------  ----  ------------  -----------------
+work@example.com      work [default] *  12%      31%   Opus 18%      Saturday at 3am
+me@example.com        personal          0%       64%   Opus 70%      Tuesday at 1pm
+team-2@example.com    team-2            0%       2%    Opus 0%       Thursday at 7pm
+```
+
+## Pick your version
+
+The two versions are separate, each with its own scripts, installer, skills and tests, so a
+change to one never touches the other.
+
+| | Version | Shells | Install |
+|---|---|---|---|
+| macOS | [macos/](macos) | zsh | `cd macos && ./install.sh` |
+| Windows | [windows/](windows) | PowerShell 7, Windows PowerShell 5.1, Git Bash | `cd windows; .\install.ps1` |
+
+Both give you the same commands (`cc`, `cc-add`, `cc-login`, `ccusage-all`, `cc-use`) and
+the same three skills (`cc-usage`, `cc-run`, `cc-use`). The skills also install as a Claude
+Code plugin; add this repository as a marketplace and install the plugin for your OS:
+
+```text
+/plugin marketplace add ali-rafiei/claude-multi-account
+/plugin install claude-multi-account-macos@claude-multi-account
+/plugin install claude-multi-account-windows@claude-multi-account
+```
+
+(one or the other, not both). Each version's README covers requirements, how the account
+swap works, and uninstalling.
+
+## Credits
+
+The lock protocol and the macOS Keychain handling are adapted from
+[claude-swap](https://github.com/realiti4/claude-swap) by Onur Cetinkol (MIT); see
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+## License
+
+MIT

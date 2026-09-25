@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# The two versions are independent: each job tests only its own folder, so a change to one
+# cannot pass by accident on the other's tests.
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uvx ruff check . && uvx ruff format --check .
+      - name: Validate the marketplace and both plugins
+        run: |
+          npx --yes @anthropic-ai/claude-code plugin validate .
+          npx --yes @anthropic-ai/claude-code plugin validate macos
+          npx --yes @anthropic-ai/claude-code plugin validate windows
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Shell syntax
+        run: zsh -n macos/scripts/profiles.zsh && bash -n macos/install.sh && sh -n macos/scripts/bin/open
+      - name: Tests
+        run: uv run pytest -q macos/tests
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: PowerShell syntax
+        shell: pwsh
+        run: |
+          foreach ($file in 'windows/install.ps1', 'windows/scripts/profiles.ps1', 'ci/windows-smoke.ps1') {
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file), [ref]$null, [ref]$errors) | Out-Null
+            if ($errors) { $errors | ForEach-Object { Write-Error "${file}: $_" }; exit 1 }
+          }
+      - name: Git Bash syntax
+        shell: bash
+        run: bash -n windows/scripts/profiles.sh
+      - name: Tests
+        run: uv run pytest -q windows/tests
+      - name: Smoke test in PowerShell 7
+        shell: pwsh
+        run: ./ci/windows-smoke.ps1 -Shell pwsh
+      - name: Smoke test in Windows PowerShell 5.1
+        shell: pwsh
+        run: ./ci/windows-smoke.ps1 -Shell powershell

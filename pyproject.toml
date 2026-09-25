@@ -1,0 +1,28 @@
+[project]
+name = "claude-multi-account"
+version = "1.0.0"
+description = "Run Claude Code as several accounts on one machine, and swap which one VS Code uses. macOS and Windows versions."
+requires-python = ">=3.9"
+license = "MIT"
+dependencies = []
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+# Each version is tested on its own, in its own process: `uv run pytest macos/tests` and
+# `uv run pytest windows/tests`. Their modules share names, so one run cannot import both.
+[tool.pytest.ini_options]
+addopts = "-p no:cacheprovider"
+
+[tool.ruff]
+line-length = 120
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["cc_use", "cc_run", "usage_table"]
+
+[tool.ruff.format]
+quote-style = "single"

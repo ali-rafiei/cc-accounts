@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "claude-multi-account-macos",
+  "description": "macOS: run Claude Code as several accounts on one machine: per-account profiles, a usage table across all of them, one-shot prompts as another account, and swapping which account VS Code uses.",
+  "version": "1.0.0",
+  "author": {
+    "name": "Ali Rafiei",
+    "url": "https://github.com/ali-rafiei"
+  },
+  "homepage": "https://github.com/ali-rafiei/claude-multi-account",
+  "repository": "https://github.com/ali-rafiei/claude-multi-account",
+  "license": "MIT",
+  "keywords": [
+    "accounts",
+    "profiles",
+    "usage",
+    "rate-limits",
+    "vscode",
+    "macos"
+  ]
+}

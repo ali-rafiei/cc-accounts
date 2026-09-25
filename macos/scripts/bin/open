@@ -1,0 +1,18 @@
+#!/bin/sh
+# Stand-in for /usr/bin/open, on PATH only while cc-login runs. It sends http(s) URLs to a
+# fresh private browser window so an OAuth flow never reuses whichever account the browser
+# is already signed into. CC_LOGIN_BROWSER names the app (default: Google Chrome).
+browser="${CC_LOGIN_BROWSER:-Google Chrome}"
+case "$browser" in
+  Firefox*) private_flag=--private-window ;;
+  "Microsoft Edge"*) private_flag=--inprivate ;;
+  *) private_flag=--incognito ;;
+esac
+for arg in "$@"; do
+  case "$arg" in
+    http://*|https://*)
+      exec /usr/bin/open -na "$browser" --args "$private_flag" "$arg"
+      ;;
+  esac
+done
+exec /usr/bin/open "$@"

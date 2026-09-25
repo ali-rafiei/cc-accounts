@@ -1,0 +1,5 @@
+# Shell scripts must keep LF endings, or bash and zsh choke on the carriage returns that
+# Git for Windows adds on checkout by default.
+*.sh text eol=lf
+*.zsh text eol=lf
+macos/scripts/bin/open text eol=lf
