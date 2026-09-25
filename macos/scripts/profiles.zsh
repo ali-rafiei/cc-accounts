@@ -12,11 +12,14 @@
 #
 # Every function resolves its own base path rather than trusting $CLAUDE_PROFILES to be
 # exported. Tools that restore shell functions from a snapshot (Claude Code's Bash tool,
-# for one) bring the functions across without the variable.
+# for one) bring the functions across without the variable. Each also starts with
+# `emulate -L zsh`, so options set in your own .zshrc (nounset, no_bare_glob_qual, ...)
+# do not change how it runs.
 export CLAUDE_PROFILES="${CLAUDE_PROFILES:-$HOME/.claude-profiles}"
 
 # Run Claude Code as a named account: `cc work`, `cc work -p "hi"`, `cc default`
 cc() {
+  emulate -L zsh
   local base="$(_cc_base)" profile="$1"
   if [[ -z "$profile" ]]; then
     print "usage: cc <profile|default> [claude args...]"
@@ -25,6 +28,8 @@ cc() {
   fi
   shift
   if [[ "$profile" == default ]]; then
+    # A shell started inside a profile's session inherits its CLAUDE_CONFIG_DIR.
+    local CLAUDE_CONFIG_DIR; unset CLAUDE_CONFIG_DIR
     claude "$@"
   elif _cc_is_profile "$profile"; then
     # While cc-use has this login in the default slot, the profile's own copy may be
@@ -43,9 +48,10 @@ cc() {
 
 # Create a profile and log it in: `cc-add work`
 cc-add() {
+  emulate -L zsh
   local base="$(_cc_base)"
-  if [[ -z "$1" || "$1" == default || "$1" == bin || "$1" == [._]* ]]; then
-    print "usage: cc-add <profile>  (not 'default' or 'bin', and not starting with . or _)"
+  if [[ -z "$1" || "$1" == default || "$1" == bin || "$1" == [._]* || "$1" == */* ]]; then
+    print "usage: cc-add <profile>  (not 'default' or 'bin', no /, and not starting with . or _)"
     return 1
   fi
   mkdir -p "$base/$1" && cc-login "$1"
@@ -56,6 +62,7 @@ cc-add() {
 # shim in bin/, put on PATH for this call only), so it never reuses whichever account the
 # browser is already signed into. CC_LOGIN_BROWSER picks the browser.
 cc-login() {
+  emulate -L zsh
   local base="$(_cc_base)"
   PATH="$base/bin:$PATH" cc "$1" auth login
 }
@@ -63,22 +70,25 @@ cc-login() {
 # Put a profile's login in the default slot (macOS): `cc-use work`; `cc-use default`
 # restores yours; bare `cc-use` shows which account is loaded.
 cc-use() {
+  emulate -L zsh
   python3 "$(_cc_base)/cc_use.py" "$@"
 }
 
 # Usage for every account, soonest reset first: `ccusage-all`
 # Full per-account breakdown instead of the table: `ccusage-all --raw`
 ccusage-all() {
+  emulate -L zsh
   local base="$(_cc_base)"
   if [[ "$1" != --raw ]]; then
     python3 "$base/usage_table.py"
     return
   fi
-  local loaded="$(_cc_loaded)" profile
+  local loaded="$(_cc_loaded)" profile CLAUDE_CONFIG_DIR
+  unset CLAUDE_CONFIG_DIR  # inherited inside a profile's session; the default takes none
   print -P "%B=== default ===%b"
   claude -p "/usage" < /dev/null 2>&1
   print
-  for profile in $(_cc_profiles); do
+  for profile in ${(f)"$(_cc_profiles)"}; do
     [[ "$profile" == "$loaded" ]] && continue  # cc-use put it in the default slot, printed above
     print -P "%B=== $profile ===%b"
     CLAUDE_CONFIG_DIR="$base/$profile" claude -p "/usage" < /dev/null 2>&1
@@ -87,11 +97,13 @@ ccusage-all() {
 }
 
 _cc_base() {
+  emulate -L zsh
   local base="${CLAUDE_PROFILES:-$HOME/.claude-profiles}"
   print -r -- "${base%/}"
 }
 
 _cc_profiles() {
+  emulate -L zsh
   local base="$(_cc_base)" dir
   for dir in "$base"/*(/N); do
     _cc_is_profile "${dir:t}" && print -r -- "${dir:t}"
@@ -99,10 +111,13 @@ _cc_profiles() {
 }
 
 _cc_is_profile() {
-  [[ -n "$1" && "$1" != bin && "$1" != default && "$1" != [._]* && -d "$(_cc_base)/$1" ]]
+  emulate -L zsh
+  # No /: `work/` names the same directory as `work` but would slip past the .loaded check.
+  [[ -n "$1" && "$1" != bin && "$1" != default && "$1" != [._]* && "$1" != */* && -d "$(_cc_base)/$1" ]]
 }
 
 _cc_loaded() {
+  emulate -L zsh
   local file="$(_cc_base)/.loaded"
   [[ -f "$file" ]] && print -r -- "$(<"$file")"
 }
@@ -111,6 +126,7 @@ _cc_loaded() {
 # Which plugins are on lives in settings.json, not the plugins dir, so those two keys are
 # mirrored from ~/.claude/settings.json into the profile's own settings on every launch.
 _cc_share() {
+  emulate -L zsh
   local item
   for item in skills plugins; do
     [[ -e "$1/$item" || -L "$1/$item" ]] || ln -s "$HOME/.claude/$item" "$1/$item"
