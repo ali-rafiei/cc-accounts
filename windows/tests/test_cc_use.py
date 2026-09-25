@@ -85,6 +85,19 @@ def test__load__default_writes_a_refreshed_token_back_to_its_profile(machine):
     assert cc_use.loaded_profile() is None
 
 
+def test__load__default_deletes_the_stash_once_the_users_login_is_back(machine):
+    # Arrange
+    cc_use.load('work')
+
+    # Act
+    cc_use.load(None)
+
+    # Assert: a copy left behind would go stale as the user's own login rotates.
+    assert machine['default'].read_text() == HOME_SECRET
+    assert not machine['stash'].exists()
+    assert not (machine['profiles'] / '.home-account.json').exists()
+
+
 def test__load__switching_between_profiles_leaves_the_stashed_login_alone(machine):
     # Arrange
     other = machine['profiles'] / 'other'
@@ -318,9 +331,9 @@ def test__verify_owner__offline_refuses_a_changed_login(machine):
 
 
 def test__forget__deletes_the_stashed_login_and_its_record(machine):
-    # Arrange: a round trip leaves a stale copy of the user's login in the stash.
-    cc_use.load('work')
-    cc_use.load(None)
+    # Arrange: an older cc-use left a copy of the user's login in the stash after a round trip.
+    machine['stash'].write_text(HOME_SECRET)
+    (machine['profiles'] / '.home-account.json').write_text(json.dumps(HOME_ACCOUNT))
 
     # Act
     cc_use.forget()
@@ -553,8 +566,7 @@ def test__forget__offline_refuses_when_the_slot_login_is_not_the_stashed_one(mac
 
 def test__forget__refuses_while_the_slot_is_empty(machine):
     # Arrange: a stash, and no login in the default slot at all.
-    cc_use.load('work')
-    cc_use.load(None)
+    _killed_mid_swap(machine, HOME_ACCOUNT)
     machine['default'].unlink()
 
     # Act / Assert

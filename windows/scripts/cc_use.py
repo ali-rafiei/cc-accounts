@@ -149,6 +149,11 @@ def load(target: str | None) -> str:
                 except Exception as exc:  # the swap's own error is the one raised below
                     print(f'cc-use: could not put {path} back ({exc})', file=sys.stderr)
             raise
+        if target is None:
+            # The slot holds the user's own login again, so the stash is now a copy that goes
+            # stale as that login rotates. The stash goes first: no stash may outlive its record.
+            HOME_STASH_FILE.unlink(missing_ok=True)
+            HOME_ACCOUNT_FILE.unlink(missing_ok=True)
 
     return (
         f'default slot: {_label(owner)} -> {_label(target)} '

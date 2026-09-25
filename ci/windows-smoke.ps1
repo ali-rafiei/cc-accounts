@@ -131,6 +131,7 @@ Assert ($out.Contains('work [default]') -and -not $out.Contains('Traceback')) "c
 $out = Invoke-Shell 'cc-use default'
 Assert ($out.Contains('work -> default')) "cc-use default restores the user's login: $out"
 Assert ((Get-Content (Join-Path $HOME '.claude\.credentials.json') -Raw).Contains('home-rt')) 'the default slot holds the user again'
+Assert (-not (Test-Path (Join-Path $profiles '.home-credentials.json'))) 'cc-use default deletes the stash once the user is back'
 
 $seen = Invoke-Bash 'source ~/.bashrc; cc work -p from-bash' | ConvertFrom-Json
 Assert ($seen.config -eq $work) 'Git Bash: cc work runs claude with the profile config dir'
