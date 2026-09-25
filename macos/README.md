@@ -2,7 +2,8 @@
 
 Run Claude Code as several accounts on one machine. Each account gets its own profile,
 one command shows usage across all of them, Claude can hand a task to another account, and
-on macOS you can switch which account VS Code runs as without reloading anything.
+on macOS you can switch which account VS Code and plain `claude`
+in a terminal run as, without reloading anything.
 
 Written for people who have more than one Claude subscription or seat (personal and work,
 or several team seats) and want to use whichever one has room left this week.
@@ -98,7 +99,7 @@ and `~/.claude/plugins` into it. It also copies `enabledPlugins` and
 whether a plugin is on in each account's settings, not in the plugins folder. Install a
 skill or plugin once and every profile has it. A profile's other settings stay its own.
 
-**Swapping VS Code's account (`cc-use`).** VS Code and plain `claude` use the default login:
+**Swapping the default account (`cc-use`).** VS Code and plain `claude` use the default login:
 the `Claude Code-credentials` item in the macOS Keychain, plus the account details in
 `~/.claude.json`. `cc-use work` swaps in work's login and account details. New sessions
 start on it straight away, and running ones pick it up once Claude Code's Keychain cache

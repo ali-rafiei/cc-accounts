@@ -1,6 +1,6 @@
 ---
 name: cc-run
-description: "Run a one-shot prompt, slash command or skill as another Claude account from ~/.claude-profiles on Windows, optionally on a named model. Use when the user hands a task to a named account: 'get <profile> to ...', 'have my work account do ...', 'run this as <profile>', 'ask <profile> using opus', or /cc-run <profile> <prompt>. NOT for switching the account VS Code runs as (cc-use)."
+description: "Run a one-shot prompt, slash command or skill as another Claude account from ~/.claude-profiles on Windows, optionally on a named model. Use when the user hands a task to a named account: 'get <profile> to ...', 'have my work account do ...', 'run this as <profile>', 'ask <profile> using opus', or /cc-run <profile> <prompt>. NOT for switching the account VS Code and plain `claude` run as (cc-use)."
 ---
 
 # Run a prompt as another account (Windows)

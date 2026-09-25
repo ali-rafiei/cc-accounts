@@ -10,7 +10,7 @@
     {
       "name": "claude-multi-account-macos",
       "source": "./macos",
-      "description": "macOS: per-account profiles, a usage table across all of them, one-shot prompts as another account, and swapping which account VS Code uses.",
+      "description": "macOS: per-account profiles, a usage table across all of them, one-shot prompts as another account, and swapping which account VS Code and the claude CLI use.",
       "license": "MIT",
       "keywords": [
         "accounts",
@@ -24,7 +24,7 @@
     {
       "name": "claude-multi-account-windows",
       "source": "./windows",
-      "description": "Windows (PowerShell and Git Bash): per-account profiles, a usage table across all of them, one-shot prompts as another account, and swapping which account VS Code uses.",
+      "description": "Windows (PowerShell and Git Bash): per-account profiles, a usage table across all of them, one-shot prompts as another account, and swapping which account VS Code and the claude CLI use.",
       "license": "MIT",
       "keywords": [
         "accounts",

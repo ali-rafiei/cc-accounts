@@ -2,7 +2,8 @@
 
 Run Claude Code as several accounts on one Windows machine. Each account gets its own
 profile, one command shows usage across all of them, Claude can hand a task to another
-account, and you can switch which account VS Code runs as without reloading anything.
+account, and you can switch which account VS Code and plain `claude`
+in a terminal run as, without reloading anything.
 
 Works in PowerShell 7, Windows PowerShell 5.1 and Git Bash. The macOS version is separate,
 in [../macos](../macos).
@@ -97,7 +98,7 @@ your `~\.claude\settings.json`, because Claude Code records whether a plugin is 
 account's settings. Install a skill or plugin once and every profile has it. A profile's
 other settings stay its own.
 
-**Swapping VS Code's account (`cc-use`).** On Windows, Claude Code keeps a login as a file:
+**Swapping the default account (`cc-use`).** On Windows, Claude Code keeps a login as a file:
 `~\.claude\.credentials.json` for the default login, `<profile>\.credentials.json` for a
 profile. VS Code and plain `claude` use the default one, plus the account details in
 `~\.claude.json`. `cc-use work` swaps in work's login and account details. New sessions

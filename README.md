@@ -2,7 +2,8 @@
 
 Run Claude Code as several accounts on one machine. Each account gets its own profile, one
 command shows usage across all of them, Claude can hand a task to another account, and you
-can switch which account VS Code runs as without reloading anything.
+can switch which account VS Code and plain `claude`
+in a terminal run as, without reloading anything.
 
 Written for people who have more than one Claude subscription or seat (personal and work,
 or several team seats) and want to use whichever one has room left this week.
