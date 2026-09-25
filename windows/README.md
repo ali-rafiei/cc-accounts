@@ -54,19 +54,37 @@ then adds one line to your PowerShell profiles (both Windows PowerShell's and Po
 7's) and to `~\.bashrc` for Git Bash, unless the line is already there. It backs up any
 file it would overwrite. Run it again after a `git pull` to update.
 
-Then add the skills, either as a plugin from inside Claude Code:
+Git Bash starts a login shell, which reads `~/.bash_profile` (or `~/.bash_login` or
+`~/.profile`), not `~/.bashrc`. If you have none of those, the first Git Bash window after
+installing warns that it found `~/.bashrc` but no `~/.bash_profile` and creates one that
+loads it; that is expected. If you already have one that doesn't load `~/.bashrc`, add
+`source ~/.bashrc` to it, or the commands won't be there in Git Bash.
 
-```text
-/plugin marketplace add ali-rafiei/claude-multi-account
-/plugin install claude-multi-account-windows@claude-multi-account
+Then add the skills, either as a plugin, from PowerShell or Git Bash:
+
+```powershell
+claude plugin marketplace add ali-rafiei/claude-multi-account
+claude plugin install claude-multi-account-windows@claude-multi-account
 ```
 
-or by linking them from the clone with `.\install.ps1 -Skills`. As a plugin their full names
-are `claude-multi-account-windows:cc-usage` and so on; linked, they are plain `cc-usage`.
-Either way you can just ask in words.
+(or the same two commands as `/plugin marketplace add ...` and `/plugin install ...` inside
+`claude` in a terminal; the VS Code extension's chat answers `/plugin` with "isn't available
+in this environment"), or by linking them from the clone with `.\install.ps1 -Skills`. Pick
+one: with both, each skill shows up twice under two names. As a plugin their full names are
+`claude-multi-account-windows:cc-usage` and so on; linked, they are plain `cc-usage`. Either
+way you can just ask in words.
 
-To keep profiles somewhere other than `~\.claude-profiles`, set `$env:CLAUDE_PROFILES`
-before running the installer; the lines it adds set that path for you.
+Install the plugin on your default login (a plain terminal, or plain `claude`), not inside a
+`cc <profile>` session: each time `cc` starts a profile it copies the default login's plugin
+list, when it has one, over the profile's own.
+
+To keep profiles somewhere other than `~\.claude-profiles`, set `$env:CLAUDE_PROFILES` to
+an absolute path before running the installer; the lines it adds set that path for you:
+
+```powershell
+$env:CLAUDE_PROFILES = 'D:\claude-profiles'
+.\install.ps1
+```
 
 ## Quick start
 
@@ -157,12 +175,15 @@ cc-use default              # if a profile is loaded; uninstall refuses otherwis
 That removes the scripts, the lines in your PowerShell profiles and `~\.bashrc`, and any
 skill links from `-Skills`. It also deletes the spare copy of your login that `cc-use` kept,
 once it can confirm your own login is back in the default slot; if it can't (offline, say),
-it keeps the copy, which is harmless, and prints the command to delete it later. If you
-installed the skills as a plugin, remove it from inside Claude Code too:
+it keeps the copy, which is harmless, and prints the command to delete it later. With a
+custom `CLAUDE_PROFILES`, run the uninstall from a PowerShell window that has it set (any new
+window does, until the uninstall removes the line). If you installed the skills as a plugin,
+remove it too, from PowerShell or Git Bash (or as `/plugin uninstall ...` and
+`/plugin marketplace remove ...` inside `claude` in a terminal):
 
-```text
-/plugin uninstall claude-multi-account-windows@claude-multi-account
-/plugin marketplace remove claude-multi-account
+```powershell
+claude plugin uninstall claude-multi-account-windows@claude-multi-account
+claude plugin marketplace remove claude-multi-account
 ```
 
 Your profiles, their logins and their history stay in `~\.claude-profiles`. Delete a

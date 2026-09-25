@@ -46,6 +46,9 @@ has loaded into your default login.
   once the Command Line Tools are installed.
 - macOS for `cc-use` and for `cc-login`'s throwaway browser window. The rest only needs zsh, so it
   should work on Linux, but it has only been tested on macOS.
+- Google Chrome for that window, or set `CC_LOGIN_BROWSER` to the app name of Firefox or
+  another Chromium-based browser (`Microsoft Edge`, `Brave Browser`). Safari has no
+  command-line private-window option, so it can't be used.
 
 ## Install
 
@@ -58,25 +61,34 @@ cd claude-multi-account/macos
 ```
 
 `install.sh` copies four files into `~/.claude-profiles` (or `$CLAUDE_PROFILES`) and adds
-one `source` line to `~/.zshrc` unless one is already there. It backs up any file it would
-overwrite. Run it again after a `git pull` to update.
+one `source` line to `~/.zshrc` (or `$ZDOTDIR/.zshrc`) unless one is already there. It backs
+up any file it would overwrite. Run it again after a `git pull` to update.
 
-Then add the skills, either as a plugin from inside Claude Code:
+Then add the skills, either as a plugin, from any shell:
 
-```text
-/plugin marketplace add ali-rafiei/claude-multi-account
-/plugin install claude-multi-account-macos@claude-multi-account
+```sh
+claude plugin marketplace add ali-rafiei/claude-multi-account
+claude plugin install claude-multi-account-macos@claude-multi-account
 ```
 
-or by linking them from the clone with `./install.sh --skills`. As a plugin their full names
-are `claude-multi-account-macos:cc-usage` and so on; linked, they are plain `cc-usage`. Either way
+(or the same two commands as `/plugin marketplace add ...` and `/plugin install ...` inside
+`claude` in a terminal; the VS Code extension's chat answers `/plugin` with "isn't available
+in this environment"), or by linking them from the clone with `./install.sh --skills`. Pick
+one: with both, each skill shows up twice under two names. As a plugin their full names are
+`claude-multi-account-macos:cc-usage` and so on; linked, they are plain `cc-usage`. Either way
 you can just ask in words.
+
+Install the plugin on your default login (a plain terminal, or plain `claude`), not inside a
+`cc <profile>` session: each time `cc` starts a profile it copies the default login's plugin
+list, when it has one, over the profile's own.
 
 To keep profiles somewhere other than `~/.claude-profiles`, run
 `CLAUDE_PROFILES=/path/to/dir ./install.sh`; the line it adds to `~/.zshrc` exports that
 path for you.
 
 ## Quick start
+
+Open a new terminal after installing, then:
 
 ```sh
 cc-add work          # a browser window opens; sign in with the work account
@@ -150,12 +162,15 @@ cc-use default            # if a profile is loaded; uninstall refuses otherwise
 That removes the scripts, the `~/.zshrc` line and any skill links from `--skills`. It also
 deletes the spare copy of your login that `cc-use` kept in the Keychain, once it can confirm
 your own login is back in the default slot; if it can't (offline, say), it keeps the copy,
-which is harmless, and prints the command to delete it later. If you installed
-the skills as a plugin, remove it from inside Claude Code too:
+which is harmless, and prints the command to delete it later. With a custom
+`CLAUDE_PROFILES`, run the uninstall from a terminal that has it set (any new terminal does,
+until the uninstall removes the line). If you installed the skills as a plugin, remove it
+too, from any shell (or as `/plugin uninstall ...` and `/plugin marketplace remove ...`
+inside `claude` in a terminal):
 
-```text
-/plugin uninstall claude-multi-account-macos@claude-multi-account
-/plugin marketplace remove claude-multi-account
+```sh
+claude plugin uninstall claude-multi-account-macos@claude-multi-account
+claude plugin marketplace remove claude-multi-account
 ```
 
 Your profiles, their logins and their history stay in `~/.claude-profiles`. Delete a

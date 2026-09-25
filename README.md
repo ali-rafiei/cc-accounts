@@ -29,16 +29,24 @@ change to one never touches the other.
 Both give you the same commands (`cc`, `cc-add`, `cc-login`, `ccusage-all`, `cc-use`) and
 the same three skills (`cc-usage`, `cc-run`, `cc-use`). The skills also install as a Claude
 Code plugin. They call the scripts the installer puts in `~/.claude-profiles`, so run the
-installer first, then add this repository as a marketplace and install the plugin for your OS:
+installer first, then add this repository as a marketplace and install the plugin for your
+OS. From any shell:
 
-```text
-/plugin marketplace add ali-rafiei/claude-multi-account
-/plugin install claude-multi-account-macos@claude-multi-account
-/plugin install claude-multi-account-windows@claude-multi-account
+```sh
+claude plugin marketplace add ali-rafiei/claude-multi-account
+claude plugin install claude-multi-account-macos@claude-multi-account     # macOS
+claude plugin install claude-multi-account-windows@claude-multi-account   # Windows
 ```
 
-(one or the other, not both). Each version's README covers requirements, how the account
-swap works, and uninstalling.
+Run one of the two install lines, not both. Inside `claude` in a terminal, the same thing is
+`/plugin marketplace add ali-rafiei/claude-multi-account` followed by
+`/plugin install claude-multi-account-<os>@claude-multi-account`. Use a terminal for
+`/plugin`: the VS Code extension's chat answers it with "/plugin isn't available in this
+environment".
+
+Install the plugin or link the skills with the installer (`./install.sh --skills`,
+`.\install.ps1 -Skills`), not both: with both, each skill shows up twice under two names.
+Each version's README covers requirements, how the account swap works, and uninstalling.
 
 ## Credits
 
