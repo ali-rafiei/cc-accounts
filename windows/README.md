@@ -124,6 +124,12 @@ back to its owner. A few checks guard the swap:
 
 ## Things to know
 
+- Profile names use letters, digits, spaces and `. _ -`, start with a letter or digit, and
+  don't end in a dot or space (Windows can't name a folder that way reliably). A folder with
+  any other name is not treated as a profile.
+- PowerShell swallows a bare `--` before `cc` sees it; write `'--'` to pass one through to
+  Claude. Git Bash rewrites an argument that looks like a path, so `cc work -p /review` arrives
+  as `C:/Program Files/Git/review`; write `//review` instead.
 - `cc-use` switches every session on the default login at once: all VS Code tabs and every
   plain `claude`. Sessions started with `cc <profile>` are unaffected.
 - Logins on Windows are plain JSON files in your user folder; that is how Claude Code itself
