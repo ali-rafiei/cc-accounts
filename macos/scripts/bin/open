@@ -3,9 +3,10 @@
 # fresh private browser window so an OAuth flow never reuses whichever account the browser
 # is already signed into. CC_LOGIN_BROWSER names the app (default: Google Chrome).
 browser="${CC_LOGIN_BROWSER:-Google Chrome}"
-case "$browser" in
-  Firefox*) private_flag=--private-window ;;
-  "Microsoft Edge"*) private_flag=--inprivate ;;
+# Matched case-insensitively, as `open -a` resolves the app name.
+case "$(printf '%s' "$browser" | tr '[:upper:]' '[:lower:]')" in
+  firefox*) private_flag=--private-window ;;
+  "microsoft edge"*) private_flag=--inprivate ;;
   *) private_flag=--incognito ;;
 esac
 for arg in "$@"; do
