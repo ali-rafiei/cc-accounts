@@ -428,3 +428,22 @@ def test__lock_dir__gives_up_on_a_stale_lock_it_cannot_remove(tmp_path, monkeypa
     # Assert
     assert not taker.is_alive(), '_lock_dir spun past its timeout'
     assert raised and 'stayed held' in str(raised[0])
+
+
+def test__load__writes_the_account_record_before_the_stash(machine, monkeypatch):
+    # Arrange: uninstall only runs `forget` when .home-account.json exists, so a stash must never outlive it.
+    real_write_json = cc_use._write_json
+
+    def write_json(path, data):
+        if path == machine['profiles'] / '.home-account.json':
+            raise OSError(28, 'No space left on device')
+        real_write_json(path, data)
+
+    monkeypatch.setattr(cc_use, '_write_json', write_json)
+
+    # Act
+    with pytest.raises(OSError):
+        cc_use.load('work')
+
+    # Assert
+    assert cc_use.HOME_STASH_SERVICE not in machine['keychain']

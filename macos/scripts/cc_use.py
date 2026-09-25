@@ -115,9 +115,10 @@ def load(target: str | None) -> str:
         if _keychain_get(DEFAULT_SERVICE) != current:
             raise SwapError('a session refreshed the default login mid-swap; retry')
         config = _read_json(GLOBAL_CONFIG)
-        _keychain_set(_owner_service(owner), current)
+        # The record goes first: uninstall runs `forget` only when it exists, so no stash may outlive it.
         if owner is None:
             _write_json(HOME_ACCOUNT_FILE, config['oauthAccount'])
+        _keychain_set(_owner_service(owner), current)
         # From here on the slot, ~/.claude.json and .loaded must change together; a
         # half-done swap would make _verify_owner refuse every later run.
         config_written = False
