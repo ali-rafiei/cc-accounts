@@ -71,8 +71,13 @@ function Uninstall-Scripts {
         $loaded = (Get-Content $loadedFile -Raw).Trim()
         Write-Error "cc-use has '$loaded' in your default login. Run ``cc-use default`` first."
     }
-    if (Test-Path (Join-Path $dest '.home-account.json')) {
-        Invoke-Python (Join-Path $dest 'cc_use.py') forget
+    $stashFiles = @((Join-Path $dest '.home-credentials.json'), (Join-Path $dest '.home-account.json'))
+    if (($stashFiles | Where-Object { Test-Path $_ }).Count -gt 0) {
+        # forget refuses when it cannot confirm the slot holds your own login; the rest still goes.
+        if ((Invoke-Python (Join-Path $dest 'cc_use.py') forget) -ne 0) {
+            $quoted = ($stashFiles | ForEach-Object { "'$($_ -replace "'", "''")'" }) -join ', '
+            Write-Warning "cc-use kept its stashed copy of your login (reason above). It is harmless; once your own login is back in the default slot, delete it with: Remove-Item -Force $quoted"
+        }
     }
     foreach ($name in $scripts) { Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $dest $name) }
     foreach ($path in $psProfiles) { Remove-MarkedLines $path }
@@ -172,9 +177,10 @@ function Get-ProfileExecutionPolicy {
     return 'RemoteSigned'
 }
 
+# Returns Python's exit code; its output goes to the console.
 function Invoke-Python {
-    if (Get-Command py -ErrorAction SilentlyContinue) { & py -3 @args } else { & python @args }
-    if ($LASTEXITCODE -ne 0) { throw "python $($args -join ' ') failed" }
+    if (Get-Command py -ErrorAction SilentlyContinue) { & py -3 @args | Out-Host } else { & python @args | Out-Host }
+    return $LASTEXITCODE
 }
 
 Main
