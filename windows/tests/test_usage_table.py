@@ -292,3 +292,14 @@ def test__render__marks_the_loaded_profile_under_any_spelling(profiles, capsys):
 
     # Assert
     assert 'work [default]' in capsys.readouterr().out
+
+
+def test__logged_in__reads_the_json_after_a_warning_line_holding_a_brace():
+    # Arrange
+    status = 'Warning: ignoring {"theme"} in settings.json\n{"loggedIn": true}\n'
+
+    # Act
+    logged_in = usage_table._logged_in(status)
+
+    # Assert
+    assert logged_in is True
