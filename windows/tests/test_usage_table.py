@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timedelta
 
 import pytest
@@ -221,3 +222,49 @@ def test__parse_reset__reads_feb_29_in_a_leap_year(monkeypatch):
 
     # Assert
     assert resolved == datetime(2028, 2, 29, 15, 0)
+
+
+def test__account_email__reads_a_config_saved_with_a_bom(tmp_path):
+    # Arrange: Notepad and Windows PowerShell 5.1's `Set-Content -Encoding UTF8` write a BOM.
+    (tmp_path / '.claude.json').write_text('{"oauthAccount": {"emailAddress": "me@example.com"}}', encoding='utf-8-sig')
+
+    # Act
+    email = usage_table._account_email(tmp_path)
+
+    # Assert
+    assert email == 'me@example.com'
+
+
+def test__account_email__reads_utf8_whatever_the_locale_codec(tmp_path):
+    # Arrange: Claude Code writes UTF-8; Ł is C5 81, and 0x81 is undefined in Windows' cp1252.
+    config = {'oauthAccount': {'emailAddress': 'me@example.com', 'displayName': 'Łukasz'}, 'projects': {'C:/Łódź': {}}}
+    (tmp_path / '.claude.json').write_text(json.dumps(config, ensure_ascii=False), encoding='utf-8')
+
+    # Act
+    email = usage_table._account_email(tmp_path)
+
+    # Assert
+    assert email == 'me@example.com'
+
+
+@pytest.mark.parametrize('folder', ['Default', 'BIN', 'old & copy', 'x%PATH%'])
+def test__discover__skips_folders_cc_does_not_take_as_profiles(profiles, folder):
+    # Arrange: `cc` and `cc-use` refuse these names, so the table must not probe them either.
+    (profiles / folder).mkdir()
+
+    # Act
+    names = [name for name, _ in usage_table._discover()]
+
+    # Assert
+    assert names == ['personal', 'work']
+
+
+def test__discover__probes_the_loaded_profile_through_the_default_login_under_any_spelling(profiles):
+    # Arrange: an older cc-use recorded the name as typed; Windows opens work's folder for WORK.
+    (profiles / '.loaded').write_text('WORK\n')
+
+    # Act
+    config_dirs = dict(usage_table._discover())
+
+    # Assert
+    assert config_dirs['work'] is None

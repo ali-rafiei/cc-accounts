@@ -70,7 +70,8 @@ $env:PATH = "$bin;$env:PATH"
 # A default login and one logged-in profile, as files, the way Claude Code stores them on Windows.
 New-Item -ItemType Directory -Force -Path (Join-Path $HOME '.claude') | Out-Null
 Set-Content (Join-Path $HOME '.claude\.credentials.json') '{"claudeAiOauth": {"accessToken": "home-at", "refreshToken": "home-rt"}}'
-Set-Content (Join-Path $HOME '.claude.json') '{"oauthAccount": {"accountUuid": "uuid-home", "emailAddress": "me@example.com"}}'
+# Claude Code writes UTF-8, and a non-ASCII name holds bytes Windows' cp1252 cannot decode (0x81, in L-stroke).
+[IO.File]::WriteAllText((Join-Path $HOME '.claude.json'), "{`"oauthAccount`": {`"accountUuid`": `"uuid-home`", `"emailAddress`": `"me@example.com`", `"displayName`": `"$([char]0x141)ukasz`"}}", (New-Object Text.UTF8Encoding $false))
 Set-Content (Join-Path $HOME '.claude\settings.json') '{"enabledPlugins": {"tool@market": true}}'
 
 # Existing files in the encodings users really have: Windows PowerShell 5.1's `>` writes
@@ -112,6 +113,9 @@ Assert ($out -eq 'exit=7') "cc returns claude's exit code ($Shell): $out"
 $seen = Invoke-Shell 'cc default --version' | ConvertFrom-Json
 Assert ($null -eq $seen.config) "cc default runs with no config dir ($Shell)"
 
+$out = Invoke-Shell 'ccusage-all'
+Assert ($out.Contains('me@example.com') -and $out.Contains('work@example.com') -and -not $out.Contains('Traceback')) "ccusage-all lists every account ($Shell): $out"
+
 # The access tokens are fake, so the identity check cannot resolve them and falls back to
 # comparing refresh tokens, which is the offline path.
 $out = Invoke-Shell 'cc-use work'
@@ -119,12 +123,16 @@ Assert ($out.Contains('default -> work')) "cc-use work loads the profile: $out"
 Assert ((Get-Content (Join-Path $HOME '.claude\.credentials.json') -Raw).Contains('work-rt')) 'the default slot now holds work'
 $out = Invoke-Shell 'cc work'
 Assert ($out.Contains('loaded into the default login')) "cc refuses the loaded profile: $out"
+$out = Invoke-Shell 'ccusage-all'
+Assert ($out.Contains('work [default]') -and -not $out.Contains('Traceback')) "ccusage-all marks the loaded profile ($Shell): $out"
 $out = Invoke-Shell 'cc-use default'
 Assert ($out.Contains('work -> default')) "cc-use default restores the user's login: $out"
 Assert ((Get-Content (Join-Path $HOME '.claude\.credentials.json') -Raw).Contains('home-rt')) 'the default slot holds the user again'
 
 $seen = Invoke-Bash 'source ~/.bashrc; cc work -p from-bash' | ConvertFrom-Json
 Assert ($seen.config -eq $work) 'Git Bash: cc work runs claude with the profile config dir'
+$seen = Invoke-Bash 'source ~/.bashrc; export CLAUDE_PROFILES="$HOME/.claude-profiles"; cc work -p posix' | ConvertFrom-Json
+Assert ($seen.config -eq $work) "Git Bash: a POSIX-style CLAUDE_PROFILES reaches Python as a Windows path: $($seen.config)"
 
 Invoke-Installer @('-Uninstall') | Out-Null
 Assert (-not (Test-Path (Join-Path $profiles 'cc_use.py'))) 'uninstall removes the scripts'
@@ -166,6 +174,20 @@ $env:CLAUDE_PROFILES = $custom
 Invoke-Installer @('-Uninstall') | Out-Null
 Remove-Item Env:CLAUDE_PROFILES
 Assert (-not ([IO.File]::ReadAllText($ps7Profile).Contains('claude-multi-account'))) 'uninstall from a custom folder removes the line'
+
+# A relative CLAUDE_PROFILES is anchored where the installer ran, not wherever a new shell opens.
+$installCwd = Join-Path $env:RUNNER_TEMP 'install-cwd'
+New-Item -ItemType Directory -Force -Path (Join-Path $installCwd 'rel-profiles\work') | Out-Null
+Push-Location $installCwd
+try { $env:CLAUDE_PROFILES = 'rel-profiles'; Invoke-Installer @() | Out-Null } finally { Remove-Item Env:CLAUDE_PROFILES; Pop-Location }
+$out = Invoke-Shell 'cc' -UserProfile
+Assert ($out.Contains('profiles: default work')) "the profile line loads a relative install location from elsewhere ($Shell): $out"
+$out = Invoke-Bash 'source ~/.bashrc; cc'
+Assert ($out.Contains('profiles: default work')) "Git Bash: the .bashrc line loads a relative install location from elsewhere: $out"
+$env:CLAUDE_PROFILES = Join-Path $installCwd 'rel-profiles'
+Invoke-Installer @('-Uninstall') | Out-Null
+Remove-Item Env:CLAUDE_PROFILES
+Assert (-not ([IO.File]::ReadAllText($ps7Profile).Contains('claude-multi-account'))) 'uninstall from a relative install location removes the line'
 
 # The installer runs under -ExecutionPolicy Bypass, but the policy a new shell loads the
 # profile under is the user's own.
