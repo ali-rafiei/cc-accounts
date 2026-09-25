@@ -441,6 +441,17 @@ def test__uninstall__keeps_going_when_forget_refuses(home):
     assert 'security delete-generic-password' in done.stdout
 
 
+def test__install__help_prints_only_the_header_comment(tmp_path):
+    # Act
+    out = _run(['bash', str(REPO / 'install.sh'), '--help'], tmp_path).stdout
+
+    # Assert
+    lines = out.splitlines()
+    assert lines[0] == 'Install the shell side of claude-multi-account.'
+    assert 'set -euo pipefail' not in out
+    assert lines[-1].startswith('A file already installed')
+
+
 def _zsh(command: str, home: Path, check: bool = True, extra_env: dict[str, str] | None = None) -> str:
     script = f'source "$HOME/.zshrc"; {CLAUDE_STUB}; {command}'
     return _run(['zsh', '-c', script], home, check=check, extra_env=extra_env).stdout.strip()

@@ -37,7 +37,7 @@ main() {
     "") install ;;
     --skills) install; link_skills ;;
     --uninstall) uninstall ;;
-    -h|--help) sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//' ;;
+    -h|--help) awk 'NR == 1 { next } !/^#/ { exit } { sub(/^# ?/, ""); print }' "$0" ;;  # the header comment
     *) echo "unknown option: $1 (see --help)" >&2; exit 2 ;;
   esac
 }
