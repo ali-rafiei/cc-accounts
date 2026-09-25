@@ -11,6 +11,7 @@ follow claude-swap (MIT, github.com/realiti4/claude-swap).
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import os
 import random
@@ -21,7 +22,6 @@ import tempfile
 import threading
 import time
 import unicodedata
-import urllib.error
 import urllib.request
 from contextlib import contextmanager
 from pathlib import Path
@@ -232,7 +232,8 @@ def _fetch_identity(access_token: str | None) -> dict | None:
     try:
         with urllib.request.urlopen(request, timeout=5) as response:
             body = json.loads(response.read().decode())
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
+    # OSError covers URLError, timeouts and a reset mid-read; ValueError covers bad JSON and bad UTF-8.
+    except (OSError, ValueError, http.client.HTTPException):
         return None
     account = body.get('account') if isinstance(body, dict) else None
     if not isinstance(account, dict) or not account.get('uuid'):

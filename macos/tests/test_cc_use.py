@@ -1,4 +1,6 @@
 import hashlib
+import http.client
+import io
 import json
 import os
 import time
@@ -360,3 +362,41 @@ def test__load__default_refuses_a_non_object_account_record_before_writing(machi
     # Assert
     assert machine['keychain'][cc_use.DEFAULT_SERVICE] == WORK_SECRET
     assert json.loads(machine['global_config'].read_text())['oauthAccount'] == WORK_ACCOUNT
+
+
+class _FakeResponse:
+    def __init__(self, read):
+        self.read = read
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _raise(exc):
+    def read():
+        raise exc
+
+    return read
+
+
+@pytest.mark.parametrize(
+    'read',
+    [
+        _raise(ConnectionResetError(54, 'Connection reset by peer')),
+        _raise(http.client.IncompleteRead(b'{"acc')),
+        io.BytesIO(b'\xff\xfe not utf-8').read,
+    ],
+    ids=['reset', 'incomplete', 'not-utf8'],
+)
+def test__fetch_identity__treats_a_broken_response_as_unknown(monkeypatch, read):
+    # Arrange: the request goes out, but the answer never arrives whole.
+    monkeypatch.setattr(cc_use.urllib.request, 'urlopen', lambda request, timeout: _FakeResponse(read))
+
+    # Act
+    identity = cc_use._fetch_identity('token')
+
+    # Assert: unknown sends _verify_owner down its offline path instead of crashing.
+    assert identity is None
