@@ -14,7 +14,11 @@ param([switch]$Skills, [switch]$Uninstall)
 
 $ErrorActionPreference = 'Stop'
 $repo = $PSScriptRoot
-$dest = if ($env:CLAUDE_PROFILES) { $env:CLAUDE_PROFILES.TrimEnd('\', '/') } else { Join-Path $HOME '.claude-profiles' }
+# The line written into each shell profile runs wherever a shell opens, so it needs an
+# absolute path: a relative location is anchored here, and a leading ~ becomes $HOME.
+$dest = if ($env:CLAUDE_PROFILES) {
+    $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($env:CLAUDE_PROFILES).TrimEnd('\', '/')
+} else { Join-Path $HOME '.claude-profiles' }
 $defaultDest = Join-Path $HOME '.claude-profiles'
 $scripts = @('profiles.ps1', 'profiles.sh', 'cc_run.py', 'cc_use.py', 'usage_table.py')
 $skillNames = @('cc-usage', 'cc-use', 'cc-run')
@@ -24,6 +28,8 @@ $marker = '# claude-multi-account'
 $documents = [Environment]::GetFolderPath('MyDocuments')
 $psProfiles = @((Join-Path $documents 'WindowsPowerShell\profile.ps1'), (Join-Path $documents 'PowerShell\profile.ps1'))
 $bashrc = Join-Path $HOME '.bashrc'
+# Git Bash starts as a login shell, which reads the first of these that exists and not ~/.bashrc.
+$bashLoginFiles = @('.bash_profile', '.bash_login', '.profile') | ForEach-Object { Join-Path $HOME $_ }
 
 function Main {
     if ($Uninstall) { Uninstall-Scripts; return }
@@ -47,6 +53,11 @@ function Install-Scripts {
     }
     foreach ($path in $psProfiles) { Add-LineOnce $path $psLine 'profiles.ps1' "`r`n" }
     Add-LineOnce $bashrc $bashLine 'profiles.sh' "`n"
+    # Git for Windows creates a login file that sources ~/.bashrc only when there is none yet.
+    $bashLogin = $bashLoginFiles | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if ($bashLogin -and -not ((Get-Content $bashLogin -Raw) -match '(?m)^[^#\r\n]*\.bashrc')) {
+        Add-LineOnce $bashLogin $bashLine 'profiles.sh' "`n"
+    }
 
     $policy = Get-ProfileExecutionPolicy
     if ($policy -in @('Restricted', 'AllSigned')) {
@@ -81,7 +92,7 @@ function Uninstall-Scripts {
     }
     foreach ($name in $scripts) { Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $dest $name) }
     foreach ($path in $psProfiles) { Remove-MarkedLines $path }
-    Remove-MarkedLines $bashrc
+    foreach ($path in @($bashrc) + $bashLoginFiles) { Remove-MarkedLines $path }
     foreach ($name in $skillNames) {
         $link = Join-Path $skillsDir $name
         $item = Get-Item -Force -ErrorAction SilentlyContinue $link
