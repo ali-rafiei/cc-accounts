@@ -175,6 +175,31 @@ def test__verify_owner__reads_credentials_saved_with_a_bom(machine):
     cc_use._verify_owner(current, 'work')
 
 
+def test__load__a_failed_config_write_leaves_the_slot_as_it_was(machine, monkeypatch):
+    # Arrange: another program holds ~/.claude.json open until the rename retries give up, once.
+    original_config = machine['global_config'].read_text()
+    real_replace, failures = cc_use._replace, []
+
+    def config_stays_locked(source, destination):
+        if destination == machine['global_config'] and not failures:
+            failures.append(destination)
+            raise cc_use.SwapError(f'{destination} stayed locked by another program; retry')
+        real_replace(source, destination)
+
+    monkeypatch.setattr(cc_use, '_replace', config_stays_locked)
+
+    # Act
+    with pytest.raises(cc_use.SwapError, match='stayed locked'):
+        cc_use.load('work')
+
+    # Assert: the slot still holds the user's login, so a plain retry goes through.
+    assert machine['default'].read_text() == HOME_SECRET
+    assert machine['global_config'].read_text() == original_config
+    assert cc_use.loaded_profile() is None
+    cc_use.load('work')
+    assert machine['default'].read_text() == WORK_SECRET
+
+
 def test__load__already_loaded_is_a_no_op(machine):
     # Arrange
     cc_use.load('work')

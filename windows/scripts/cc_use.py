@@ -105,14 +105,23 @@ def load(target: str | None) -> str:
     with _credentials_lock(), _config_lock():
         if _read_secret(DEFAULT_CREDENTIALS) != current:
             raise SwapError('a session refreshed the default login mid-swap; retry')
+        config_text = _read_secret(GLOBAL_CONFIG)
         config = _read_json(GLOBAL_CONFIG)
         _write_private(_owner_file(owner), current)
         if owner is None:
             _write_private(HOME_ACCOUNT_FILE, json.dumps(config['oauthAccount'], indent=2))
-        _write_private(DEFAULT_CREDENTIALS, incoming)
-        config['oauthAccount'] = incoming_account
-        _write_private(GLOBAL_CONFIG, json.dumps(config, indent=2))
-        _write_loaded(target)
+        try:
+            _write_private(DEFAULT_CREDENTIALS, incoming)
+            config['oauthAccount'] = incoming_account
+            _write_private(GLOBAL_CONFIG, json.dumps(config, indent=2))
+            _write_loaded(target)
+        except BaseException:
+            # Half a swap strands the slot: its login would no longer match what cc-use
+            # recorded, and every retry would be refused. Put all three back as they were.
+            _write_private(DEFAULT_CREDENTIALS, current)
+            _write_private(GLOBAL_CONFIG, config_text)
+            _write_loaded(owner)
+            raise
 
     return (
         f'default slot: {_label(owner)} -> {_label(target)} '
