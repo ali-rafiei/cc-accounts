@@ -29,7 +29,7 @@ function Invoke-Shell([string]$command, [switch]$UserProfile) {
     $ErrorActionPreference = 'Continue'
     if (-not $UserProfile) { $command = ". '$($profiles -replace "'", "''")\profiles.ps1'; $command" }
     $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
-    $flags = @('-NoLogo', '-ExecutionPolicy', 'Bypass')
+    $flags = @('-NoLogo', '-ExecutionPolicy', 'Bypass', '-OutputFormat', 'Text')
     if (-not $UserProfile) { $flags += '-NoProfile' }
     $out = & $Shell @flags -EncodedCommand $encoded 2>&1 | Out-String
     return $out.Trim()

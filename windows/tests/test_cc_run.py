@@ -80,6 +80,21 @@ def test__run__feeds_a_prompt_file_on_stdin(machine, capfd):
     assert seen['args'] == ['-p']
 
 
+def test__main__takes_its_arguments_as_json_from_the_environment(machine, capfd, monkeypatch):
+    # Arrange: how profiles.ps1 passes them, since Windows PowerShell 5.1 splits an argument
+    # with embedded quotes and drops an empty one.
+    (machine['profiles'] / 'work').mkdir()
+    monkeypatch.setenv(cc_run.ARGV_ENV, json.dumps(['run', 'work', '-p', 'say "hi there"', '']))
+
+    # Act
+    code = cc_run.main(['--argv-from-env'])
+
+    # Assert: claude gets them intact, and not the variable itself.
+    assert code == 0
+    assert _seen(capfd)['args'] == ['-p', 'say "hi there"', '']
+    assert cc_run.ARGV_ENV not in os.environ
+
+
 def test__run__refuses_the_profile_cc_use_has_loaded(machine, capfd):
     # Arrange
     (machine['profiles'] / 'work').mkdir()

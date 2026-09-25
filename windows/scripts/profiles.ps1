@@ -19,14 +19,19 @@ function Invoke-CcPython {
     if (Get-Command py -ErrorAction SilentlyContinue) { & py -3 @args } else { & python @args }
 }
 
-function cc {
-    $script = Join-Path (Get-CcProfilesDir) 'cc_run.py'
-    if ($args.Count -eq 0) { Invoke-CcPython $script --help } else { Invoke-CcPython $script run @args }
+# Windows PowerShell 5.1 splits an argument with embedded double quotes and drops an empty
+# one when it starts a native program, so cc_run.py takes its arguments as JSON instead.
+function Invoke-CcRun {
+    $env:CC_RUN_ARGV = ConvertTo-Json -Compress -InputObject @($args | ForEach-Object { "$_" })
+    try { Invoke-CcPython (Join-Path (Get-CcProfilesDir) 'cc_run.py') --argv-from-env }
+    finally { Remove-Item Env:CC_RUN_ARGV -ErrorAction SilentlyContinue }
 }
 
-function cc-add { Invoke-CcPython (Join-Path (Get-CcProfilesDir) 'cc_run.py') add @args }
+function cc { if ($args.Count -eq 0) { Invoke-CcRun --help } else { Invoke-CcRun run @args } }
 
-function cc-login { Invoke-CcPython (Join-Path (Get-CcProfilesDir) 'cc_run.py') login @args }
+function cc-add { Invoke-CcRun add @args }
+
+function cc-login { Invoke-CcRun login @args }
 
 function cc-use { Invoke-CcPython (Join-Path (Get-CcProfilesDir) 'cc_use.py') @args }
 

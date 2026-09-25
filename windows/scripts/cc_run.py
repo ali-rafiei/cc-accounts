@@ -27,6 +27,9 @@ RESERVED_NAMES = {'bin', 'default'}
 # no trailing dot or space, which Windows drops, so a name opens only its own folder.
 PROFILE_NAME = re.compile(r'[A-Za-z0-9](?:[A-Za-z0-9._ -]*[A-Za-z0-9_-])?')
 SHARED_DIRS = ('skills', 'plugins')
+# profiles.ps1 passes the arguments here as a JSON list: Windows PowerShell 5.1 splits one
+# with embedded double quotes and drops an empty one when it starts a native program.
+ARGV_ENV = 'CC_RUN_ARGV'
 MIRRORED_SETTINGS = ('enabledPlugins', 'extraKnownMarketplaces')
 LOGIN_HINT = (
     'Sign in with the account this profile is for. If your browser is already signed into a '
@@ -42,6 +45,8 @@ class ProfileError(Exception):
 
 
 def main(argv: list[str]) -> int:
+    if argv == ['--argv-from-env']:
+        argv = json.loads(os.environ.pop(ARGV_ENV))
     if not argv or argv[0] in ('-h', '--help'):
         print(USAGE)
         print(f'profiles: default {" ".join(list_profiles())}')
