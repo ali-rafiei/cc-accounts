@@ -174,17 +174,167 @@ def test__uninstall__refuses_while_a_profile_is_loaded(home):
     assert (home / '.claude-profiles' / 'profiles.zsh').exists()
 
 
-def _zsh(command: str, home: Path, check: bool = True) -> str:
+def test__cc__runs_under_the_users_nounset_option(home):
+    # Act: a bare `cc` reads $1, which nounset turns into an error.
+    out = _zsh('setopt nounset; cc', home, check=False)
+
+    # Assert
+    assert 'usage: cc' in out
+    assert 'parameter not set' not in out
+
+
+def test__cc__lists_profiles_under_the_users_no_bare_glob_qual_option(home):
+    # Arrange
+    (home / '.claude-profiles' / 'work').mkdir()
+
+    # Act
+    out = _zsh('setopt no_bare_glob_qual; cc', home, check=False)
+
+    # Assert
+    assert 'profiles: default work' in out
+
+
+def test__cc__default_drops_an_inherited_config_dir(home):
+    # Arrange: a shell started from inside a profile's session inherits its config dir.
+    inherited = {'CLAUDE_CONFIG_DIR': str(home / '.claude-profiles' / 'work')}
+
+    # Act
+    out = _zsh('cc default -p hi', home, extra_env=inherited)
+
+    # Assert
+    assert out == 'CONFIG=none ARGS=-p hi'
+
+
+def test__cc__refuses_the_loaded_profile_named_with_a_trailing_slash(home):
+    # Arrange
+    (home / '.claude-profiles' / 'work').mkdir()
+    (home / '.claude-profiles' / '.loaded').write_text('work\n')
+
+    # Act
+    out = _zsh('cc work/', home, check=False)
+
+    # Assert
+    assert 'CONFIG=' not in out
+
+
+def test__cc__returns_claudes_exit_status(home):
+    # Arrange
+    (home / '.claude-profiles' / 'work').mkdir()
+
+    # Act
+    out = _zsh('claude() { return 7; }; cc work -p hi; print rc=$?', home)
+
+    # Assert
+    assert out == 'rc=7'
+
+
+def test__ccusage_all__raw_keeps_a_profile_name_with_spaces_whole(home):
+    # Arrange
+    (home / '.claude-profiles' / 'my work').mkdir()
+
+    # Act
+    out = _zsh('ccusage-all --raw', home)
+
+    # Assert
+    assert f'CONFIG={home}/.claude-profiles/my work ARGS=-p /usage' in out
+    assert f'CONFIG={home}/.claude-profiles/my ARGS' not in out
+
+
+def test__ccusage_all__raw_default_drops_an_inherited_config_dir(home):
+    # Arrange
+    inherited = {'CLAUDE_CONFIG_DIR': str(home / '.claude-profiles' / 'work')}
+
+    # Act
+    out = _zsh('ccusage-all --raw', home, extra_env=inherited)
+
+    # Assert
+    assert out.splitlines()[:2] == ['=== default ===', 'CONFIG=none ARGS=-p /usage']
+
+
+def test__install__relative_location_is_made_absolute(tmp_path):
+    # Arrange
+    (tmp_path / '.claude').mkdir()
+    cwd = tmp_path / 'cwd'
+    cwd.mkdir()
+
+    # Act
+    _run(['bash', str(REPO / 'install.sh')], tmp_path, extra_env={'CLAUDE_PROFILES': 'profs'}, cwd=cwd)
+    (cwd / 'profs' / 'work').mkdir()
+    out = _zsh('cc work', tmp_path)
+
+    # Assert
+    assert out == f'CONFIG={cwd}/profs/work ARGS='
+
+
+def test__install__expands_a_quoted_tilde_in_the_location(tmp_path):
+    # Arrange
+    (tmp_path / '.claude').mkdir()
+    cwd = tmp_path / 'cwd'
+    cwd.mkdir()
+
+    # Act
+    _run(['bash', str(REPO / 'install.sh')], tmp_path, extra_env={'CLAUDE_PROFILES': '~/elsewhere'}, cwd=cwd)
+
+    # Assert
+    assert (tmp_path / 'elsewhere' / 'profiles.zsh').is_file()
+    assert not (cwd / '~').exists()
+
+
+def test__install__ignores_an_exported_cdpath(tmp_path):
+    # Arrange
+    (tmp_path / '.claude').mkdir()
+
+    # Act: a relative script path makes `cd` consult CDPATH, which then prints the directory.
+    _run(['bash', 'macos/install.sh'], tmp_path, extra_env={'CDPATH': '.'}, cwd=REPO.parent)
+
+    # Assert
+    assert (tmp_path / '.claude-profiles' / 'profiles.zsh').is_file()
+
+
+def test__uninstall__warns_about_a_hand_written_source_line(tmp_path):
+    # Arrange
+    (tmp_path / '.claude').mkdir()
+    (tmp_path / '.zshrc').write_text('source ~/.claude-profiles/profiles.zsh\n')
+    _run(['bash', str(REPO / 'install.sh')], tmp_path)
+
+    # Act
+    out = _run(['bash', str(REPO / 'install.sh'), '--uninstall'], tmp_path).stdout
+
+    # Assert: the line now sources a deleted file on every shell start, so say so.
+    assert 'source ~/.claude-profiles/profiles.zsh' in out
+
+
+@pytest.mark.parametrize(('browser', 'flag'), [('firefox', '--private-window'), ('microsoft edge', '--inprivate')])
+def test__open__lowercase_browser_name_still_gets_its_private_flag(tmp_path, browser, flag):
+    # Arrange: a copy of the shim whose real `open` only prints its arguments.
+    fake_open = tmp_path / 'fake-open'
+    fake_open.write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n')
+    fake_open.chmod(0o755)
+    shim = tmp_path / 'open'
+    shim.write_text((REPO / 'scripts' / 'bin' / 'open').read_text().replace('/usr/bin/open', str(fake_open)))
+
+    # Act
+    out = _run(['sh', str(shim), 'https://example.com/oauth'], tmp_path, extra_env={'CC_LOGIN_BROWSER': browser})
+
+    # Assert
+    assert out.stdout.splitlines() == ['-na', browser, '--args', flag, 'https://example.com/oauth']
+
+
+def _zsh(command: str, home: Path, check: bool = True, extra_env: dict[str, str] | None = None) -> str:
     script = f'source "$HOME/.zshrc"; {CLAUDE_STUB}; {command}'
-    return _run(['zsh', '-c', script], home, check=check).stdout.strip()
+    return _run(['zsh', '-c', script], home, check=check, extra_env=extra_env).stdout.strip()
 
 
 def _run(
-    args: list[str], home: Path, check: bool = True, extra_env: dict[str, str] | None = None
+    args: list[str],
+    home: Path,
+    check: bool = True,
+    extra_env: dict[str, str] | None = None,
+    cwd: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     env = {k: v for k, v in os.environ.items() if k not in ('CLAUDE_PROFILES', 'CLAUDE_CONFIG_DIR', 'ZDOTDIR')}
     env.update(HOME=str(home), SHELL='/bin/zsh', **(extra_env or {}))
-    done = subprocess.run(args, env=env, capture_output=True, text=True, timeout=30)
+    done = subprocess.run(args, env=env, capture_output=True, text=True, timeout=30, cwd=cwd or home)
     if check:
         assert done.returncode == 0, done.stdout + done.stderr
     done.stdout = done.stdout + done.stderr
