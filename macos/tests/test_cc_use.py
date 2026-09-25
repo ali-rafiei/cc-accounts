@@ -63,7 +63,7 @@ def test__owner_service__default_login_goes_to_the_stash(machine):
     assert cc_use._owner_service(None) == cc_use.HOME_STASH_SERVICE
 
 
-@pytest.mark.parametrize('name', ['bin', 'default', '.hidden', '_scratch', 'missing'])
+@pytest.mark.parametrize('name', ['bin', 'default', '.hidden', '_scratch', 'missing', '', 'work/', 'work/.'])
 def test__load__rejects_names_that_are_not_profiles(machine, name):
     # Arrange
     (machine['profiles'] / 'bin').mkdir()
@@ -253,3 +253,14 @@ def test__lock_dir__gives_up_on_a_live_lock(tmp_path, monkeypatch):
         with cc_use._lock_dir(lock, stale_s=60):
             pass
     assert lock.is_dir()
+
+
+def test__load__recorded_name_matches_the_one_the_shell_guard_compares(machine):
+    # Arrange: `cc work` refuses while .loaded says exactly "work"; "work/" names the same dir.
+    # Act
+    with pytest.raises(cc_use.SwapError, match='no such profile'):
+        cc_use.load('work/')
+
+    # Assert
+    assert machine['keychain'][cc_use.DEFAULT_SERVICE] == HOME_SECRET
+    assert cc_use.loaded_profile() is None
