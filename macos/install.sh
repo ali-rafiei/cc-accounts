@@ -8,8 +8,16 @@
 # A file already installed that differs from this copy is backed up beside itself first.
 set -euo pipefail
 
-repo="$(cd "$(dirname "$0")" && pwd)"
+# CDPATH unset: with it exported, `cd macos` prints the directory and repo gets it twice.
+repo="$(CDPATH='' cd "$(dirname "$0")" && pwd)"
 dest="${CLAUDE_PROFILES:-$HOME/.claude-profiles}"
+# The source line written to ~/.zshrc runs from wherever a terminal opens, so it needs an
+# absolute path: expand a quoted ~/ and anchor a relative path at the current directory.
+case "$dest" in
+  "~/"*) dest="$HOME/${dest#"~/"}" ;;
+  /*) ;;
+  *) dest="$PWD/$dest" ;;
+esac
 dest="${dest%/}"
 zshrc="${ZDOTDIR:-$HOME}/.zshrc"
 skills_dir="$HOME/.claude/skills"
@@ -73,6 +81,12 @@ uninstall() {
     printf '%s\n' "$kept" > "$zshrc"
     echo "removed the source line from $zshrc"
   fi
+  local leftover
+  leftover="$(hand_written_source_lines || true)"
+  if [[ -n "$leftover" ]]; then
+    echo "note: $zshrc still sources the profiles.zsh just removed; delete this by hand:"
+    printf '  %s\n' "$leftover"
+  fi
   for skill in "${skills[@]}"; do
     if [[ -L "$skills_dir/$skill" && "$(readlink "$skills_dir/$skill")" == "$repo/skills/$skill" ]]; then
       rm "$skills_dir/$skill"
@@ -98,8 +112,18 @@ link_skills() {
 already_sourced() {
   [[ -f "$zshrc" ]] || return 1
   grep -qF "$marker" "$zshrc" && return 0
-  grep -qF "$dest/profiles.zsh" "$zshrc" && return 0
-  [[ "$dest" == "$HOME/.claude-profiles" ]] && grep -qE '(\$HOME|\$\{HOME\}|~)/\.claude-profiles/profiles\.zsh' "$zshrc"
+  hand_written_source_lines > /dev/null
+}
+
+# Print the lines of ~/.zshrc that source profiles.zsh by its path; false when there are none.
+hand_written_source_lines() {
+  [[ -f "$zshrc" ]] || return 1
+  local found=1
+  grep -F "$dest/profiles.zsh" "$zshrc" && found=0
+  if [[ "$dest" == "$HOME/.claude-profiles" ]]; then
+    grep -E '(\$HOME|\$\{HOME\}|~)/\.claude-profiles/profiles\.zsh' "$zshrc" && found=0
+  fi
+  return $found
 }
 
 copy_with_backup() {
