@@ -15,7 +15,7 @@ import os
 import re
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 PROFILES_DIR = Path(os.environ.get('CLAUDE_PROFILES') or Path.home() / '.claude-profiles').expanduser()
@@ -24,7 +24,7 @@ MAX_PARALLEL = 6
 SESSION = re.compile(r'Current session:\s*(\d+)%')
 WEEK_ALL = re.compile(r'Current week \(all models\):\s*(\d+)%')
 WEEK_OTHER = re.compile(r'Current week \((?!all models)([^)]+)\):\s*(\d+)%')
-WEEK_RESET = re.compile(r'Current week \(all models\).*?resets ([^(]+)')
+WEEK_RESET = re.compile(r'Current week \(all models\).*?resets ([^(\n]+)')
 
 
 def main() -> None:
@@ -74,8 +74,9 @@ def _probe(name: str, config_dir: Path | None) -> dict:
         'reset_at': None,
         'note': '',
     }
-    if not _logged_in(config_dir):
-        row['note'] = 'not logged in'
+    status = _claude(['auth', 'status'], config_dir)
+    if not _logged_in(status):
+        row['note'] = _error_line(status) or 'not logged in'
         return row
     out = _claude(['-p', '/usage'], config_dir)
     if m := SESSION.search(out):
@@ -86,7 +87,7 @@ def _probe(name: str, config_dir: Path | None) -> dict:
         row['reset_at'], row['resets'] = _parse_reset(m.group(1).strip())
     row['other'] = ', '.join(f'{n.strip()} {p}%' for n, p in WEEK_OTHER.findall(out))
     if row['week'] is None:
-        row['note'] = 'no limit data'
+        row['note'] = _error_line(out) or 'no limit data'
     return row
 
 
@@ -96,7 +97,8 @@ def _current_account() -> str | None:
     if raw:
         return _account_email(Path(raw))
     loaded = _loaded_profile()
-    return _account_email(PROFILES_DIR / loaded if loaded else None)
+    # A .loaded left naming a deleted profile still means the default login is the one in use.
+    return (loaded and _account_email(PROFILES_DIR / loaded)) or _account_email(None)
 
 
 def _loaded_profile() -> str | None:
@@ -108,55 +110,77 @@ def _loaded_profile() -> str | None:
 
 
 def _parse_reset(reset: str) -> tuple[datetime | None, str]:
-    """Parse a '<Mon> <D> at <time>' reset into (absolute datetime, '<Weekday> at <time>').
+    """Parse a '[<Mon> <D>[, <YYYY>] at ]<time>' reset into (absolute datetime, '<Weekday> at <time>').
 
-    The source string carries no year, so pick the one that puts the reset in the
-    near future rather than the recent past -- that resolved datetime is what lets
+    A bare time resets today. A date with no year takes the year that puts the reset in
+    the near future rather than the recent past -- that resolved datetime is what lets
     callers sort resets chronologically instead of alphabetically by weekday name.
     """
-    parts = reset.split(' at ', 1)
-    if len(parts) != 2:
-        return None, reset
-    date_part, time_part = parts
-    try:
-        month_day = datetime.strptime(date_part.strip(), '%b %d').date()
-    except ValueError:
-        return None, reset
+    date_part, _, time_part = reset.rpartition(' at ')
+    time_part = time_part.strip()
     time_of_day = None
     for fmt in ('%I%p', '%I:%M%p'):
         try:
-            time_of_day = datetime.strptime(time_part.strip().upper(), fmt).time()
+            time_of_day = datetime.strptime(time_part.upper(), fmt).time()
             break
         except ValueError:
             continue
     if time_of_day is None:
         return None, reset
     now = datetime.now()
-    for year in (now.year, now.year + 1):
-        try:
-            day = month_day.replace(year=year)
-        except ValueError:  # Feb 29 in a non-leap year
-            continue
+    for day in _reset_days(date_part.strip(), now):
         candidate = datetime.combine(day, time_of_day)
         if candidate >= now - timedelta(days=7):
-            return candidate, f'{day.strftime("%A")} at {time_part.strip()}'
+            return candidate, f'{day.strftime("%A")} at {time_part}'
     return None, reset
+
+
+def _reset_days(date_part: str, now: datetime) -> list[date]:
+    """The calendar days a reset's date text can mean, earliest first."""
+    if not date_part:
+        return [now.date()]
+    try:
+        return [datetime.strptime(date_part, '%b %d, %Y').date()]
+    except ValueError:
+        pass
+    try:
+        # Parse against a leap year, so Feb 29 is a valid day before the real year is chosen.
+        month_day = datetime.strptime(f'{date_part} 2000', '%b %d %Y').date()
+    except ValueError:
+        return []
+    days = []
+    for year in (now.year - 1, now.year, now.year + 1):
+        try:
+            days.append(month_day.replace(year=year))
+        except ValueError:  # Feb 29 in a non-leap year
+            continue
+    return days
 
 
 def _account_email(config_dir: Path | None) -> str | None:
     path = (config_dir / '.claude.json') if config_dir else (Path.home() / '.claude.json')
     try:
         with path.open() as fh:
-            return json.load(fh).get('oauthAccount', {}).get('emailAddress')
+            return (json.load(fh).get('oauthAccount') or {}).get('emailAddress')
     except (OSError, json.JSONDecodeError):
         return None
 
 
-def _logged_in(config_dir: Path | None) -> bool:
+def _logged_in(status: str) -> bool:
+    """Read `claude auth status` output, which may carry warning lines before its JSON."""
+    start = status.find('{')
+    if start < 0:
+        return False
     try:
-        return json.loads(_claude(['auth', 'status'], config_dir)).get('loggedIn') is True
+        parsed, _ = json.JSONDecoder().raw_decode(status, start)
     except json.JSONDecodeError:
         return False
+    return parsed.get('loggedIn') is True
+
+
+def _error_line(out: str) -> str:
+    """The first line of an `error: ...` string from _claude, else ''."""
+    return out.splitlines()[0] if out.startswith('error: ') else ''
 
 
 def _claude(args: list[str], config_dir: Path | None) -> str:
@@ -166,10 +190,16 @@ def _claude(args: list[str], config_dir: Path | None) -> str:
         env['CLAUDE_CONFIG_DIR'] = str(config_dir)
     try:
         done = subprocess.run(
-            ['claude', *args], capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL, timeout=120
+            ['claude', *args],
+            capture_output=True,
+            encoding='utf-8',
+            errors='replace',
+            env=env,
+            stdin=subprocess.DEVNULL,
+            timeout=120,
         )
         return done.stdout + done.stderr
-    except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+    except (subprocess.TimeoutExpired, OSError) as exc:
         return f'error: {exc}'
 
 
