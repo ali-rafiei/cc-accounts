@@ -672,3 +672,34 @@ def test__load__default_restores_after_loading_a_name_with_edge_spaces(machine):
     assert machine['keychain'][cc_use.DEFAULT_SERVICE] == HOME_SECRET
     assert machine['keychain'][cc_use._owner_service('work')] == WORK_SECRET
     assert cc_use.loaded_profile() is None
+
+
+def test__load__refuses_when_a_session_refreshes_the_slot_before_the_lock(machine, monkeypatch):
+    # Arrange: a default session rotates the user's token after cc-use read it and before the lock.
+    rotated = json.dumps({'claudeAiOauth': {'accessToken': 'home-at-2', 'refreshToken': 'home-rt-2'}})
+    _on_lock(monkeypatch, lambda: machine['keychain'].__setitem__(cc_use.DEFAULT_SERVICE, rotated))
+
+    # Act / Assert: stashing the stale copy it read first would strand the rotated one.
+    with pytest.raises(cc_use.SwapError, match='refreshed the default login mid-swap'):
+        cc_use.load('work')
+    assert machine['keychain'][cc_use.DEFAULT_SERVICE] == rotated
+    assert cc_use.HOME_STASH_SERVICE not in machine['keychain']
+
+
+def test__load__failed_loaded_write_leaves_no_partial_record(machine, monkeypatch):
+    # Arrange: the disk fills while .loaded is written, leaving a truncated name behind.
+    def write_loaded(profile):
+        if profile is not None:
+            cc_use.LOADED_FILE.write_text(profile[:2])
+            raise OSError(28, 'No space left on device')
+        cc_use.LOADED_FILE.unlink(missing_ok=True)
+
+    monkeypatch.setattr(cc_use, '_write_loaded', write_loaded)
+
+    # Act
+    with pytest.raises(OSError):
+        cc_use.load('work')
+
+    # Assert
+    assert cc_use.loaded_profile() is None
+    assert machine['keychain'][cc_use.DEFAULT_SERVICE] == HOME_SECRET

@@ -441,6 +441,46 @@ def test__uninstall__keeps_going_when_forget_refuses(home):
     assert 'security delete-generic-password' in done.stdout
 
 
+def test__ccusage_all__raw_skips_the_loaded_profiles_own_copy(home):
+    # Arrange: work's login is in the default slot, so its own copy may be stale.
+    (home / '.claude-profiles' / 'work').mkdir()
+    (home / '.claude-profiles' / 'personal').mkdir()
+    (home / '.claude-profiles' / '.loaded').write_text('work\n')
+
+    # Act
+    out = _zsh('ccusage-all --raw', home)
+
+    # Assert
+    assert f'CONFIG={home}/.claude-profiles/work ' not in out
+    assert f'CONFIG={home}/.claude-profiles/personal ARGS=-p /usage' in out
+
+
+def test__cc_login__puts_the_throwaway_browser_shim_first_on_path(home):
+    # Arrange
+    (home / '.claude-profiles' / 'work').mkdir()
+
+    # Act
+    out = _zsh('claude() { print -r -- "OPEN=$(whence -p open) ARGS=$*"; }; cc-login work', home)
+
+    # Assert
+    assert out == f'OPEN={home}/.claude-profiles/bin/open ARGS=auth login'
+
+
+@pytest.mark.skipif(os.uname().sysname != 'Darwin', reason='uninstall only runs forget on macOS')
+def test__uninstall__deletes_the_stash_through_forget(home):
+    # Arrange: a stub stands in for cc_use.py, so the real Keychain is never touched.
+    dest = home / '.claude-profiles'
+    (dest / '.home-account.json').write_text('{}')
+    (dest / 'cc_use.py').write_text('import sys\nopen(sys.argv[0] + ".args", "w").write(" ".join(sys.argv[1:]))\n')
+
+    # Act
+    done = _run(['bash', str(REPO / 'install.sh'), '--uninstall'], home)
+
+    # Assert
+    assert (dest / 'cc_use.py.args').read_text() == 'forget'
+    assert 'kept' not in done.stdout
+
+
 def test__install__help_prints_only_the_header_comment(tmp_path):
     # Act
     out = _run(['bash', str(REPO / 'install.sh'), '--help'], tmp_path).stdout
