@@ -6,6 +6,7 @@ import os
 import threading
 import time
 import unicodedata
+from contextlib import contextmanager
 
 import pytest
 
@@ -447,3 +448,40 @@ def test__load__writes_the_account_record_before_the_stash(machine, monkeypatch)
 
     # Assert
     assert cc_use.HOME_STASH_SERVICE not in machine['keychain']
+
+
+def _on_lock(monkeypatch, action):
+    """Run `action` as the credential locks are taken, i.e. after every check made before them."""
+    real_lock = cc_use._credentials_lock
+
+    @contextmanager
+    def lock():
+        with real_lock():
+            action()
+            yield
+
+    monkeypatch.setattr(cc_use, '_credentials_lock', lock)
+
+
+def test__load__sees_a_session_started_while_waiting_for_the_lock(machine, monkeypatch):
+    # Arrange: `cc work` starts a session between cc-use's first look and the swap.
+    sessions = machine['profiles'] / 'work' / 'sessions'
+    sessions.mkdir()
+    _on_lock(monkeypatch, lambda: (sessions / f'{os.getpid()}.json').write_text('{}'))
+
+    # Act / Assert
+    with pytest.raises(cc_use.SwapError, match='running session'):
+        cc_use.load('work')
+    assert machine['keychain'][cc_use.DEFAULT_SERVICE] == HOME_SECRET
+
+
+def test__load__moves_the_incoming_login_as_it_stands_under_the_lock(machine, monkeypatch):
+    # Arrange: a work session refreshes (rotates) work's own token and exits before the lock is taken.
+    rotated = json.dumps({'claudeAiOauth': {'accessToken': 'work-at-2', 'refreshToken': 'work-rt-2'}})
+    _on_lock(monkeypatch, lambda: machine['keychain'].__setitem__(cc_use._owner_service('work'), rotated))
+
+    # Act
+    cc_use.load('work')
+
+    # Assert
+    assert machine['keychain'][cc_use.DEFAULT_SERVICE] == rotated

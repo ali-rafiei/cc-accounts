@@ -101,19 +101,23 @@ def load(target: str | None) -> str:
         return f'{_label(target)} is already in the default slot'
     if target is not None:
         _require_profile(target)
-        _refuse_if_running(target)
     current = _keychain_get(DEFAULT_SERVICE)
     if current is None:
         raise SwapError('the default slot holds no login; run `claude auth login` first')
     _verify_owner(current, owner)
-    incoming = _keychain_get(_owner_service(target))
-    if incoming is None:
-        raise SwapError(f'{target} is not logged in (cc-login {target})' if target else 'no stashed login to restore')
-    incoming_account = _profile_account(target) if target else _read_json(HOME_ACCOUNT_FILE)
 
     with _credentials_lock(), _config_lock():
         if _keychain_get(DEFAULT_SERVICE) != current:
             raise SwapError('a session refreshed the default login mid-swap; retry')
+        # Checked under the lock, so a `cc <profile>` started, or a refresh made, since cc-use began is seen.
+        if target is not None:
+            _refuse_if_running(target)
+        incoming = _keychain_get(_owner_service(target))
+        if incoming is None:
+            raise SwapError(
+                f'{target} is not logged in (cc-login {target})' if target else 'no stashed login to restore'
+            )
+        incoming_account = _profile_account(target) if target else _read_json(HOME_ACCOUNT_FILE)
         config = _read_json(GLOBAL_CONFIG)
         # The record goes first: uninstall runs `forget` only when it exists, so no stash may outlive it.
         if owner is None:
