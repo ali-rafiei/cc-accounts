@@ -50,8 +50,8 @@ cc() {
 cc-add() {
   emulate -L zsh
   local base="$(_cc_base)"
-  if [[ -z "$1" || "$1" == default || "$1" == bin || "$1" == [._]* ]]; then
-    print "usage: cc-add <profile>  (not 'default' or 'bin', and not starting with . or _)"
+  if [[ -z "$1" || "$1" == default || "$1" == bin || "$1" == [._]* || "$1" == */* ]]; then
+    print "usage: cc-add <profile>  (not 'default' or 'bin', no /, and not starting with . or _)"
     return 1
   fi
   mkdir -p "$base/$1" && cc-login "$1"
@@ -112,7 +112,8 @@ _cc_profiles() {
 
 _cc_is_profile() {
   emulate -L zsh
-  [[ -n "$1" && "$1" != bin && "$1" != default && "$1" != [._]* && -d "$(_cc_base)/$1" ]]
+  # No /: `work/` names the same directory as `work` but would slip past the .loaded check.
+  [[ -n "$1" && "$1" != bin && "$1" != default && "$1" != [._]* && "$1" != */* && -d "$(_cc_base)/$1" ]]
 }
 
 _cc_loaded() {
