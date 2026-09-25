@@ -194,7 +194,9 @@ def _owner_service(profile: str | None) -> str:
 def _require_profile(name: str) -> None:
     # A name with a slash ("work/") finds the same dir, but .loaded would then not match the name `cc` compares.
     malformed = not name or '/' in name or name[:1] in ('.', '_')
-    if malformed or name in RESERVED_NAMES or not (PROFILES_DIR / name).is_dir():
+    # The folder lookup ignores case and Unicode form; the Keychain item and .loaded do not.
+    exact = (PROFILES_DIR / name).is_dir() and name in os.listdir(PROFILES_DIR)
+    if malformed or name in RESERVED_NAMES or not exact:
         raise SwapError(f'no such profile: {name}')
 
 

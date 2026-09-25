@@ -113,7 +113,9 @@ _cc_profiles() {
 _cc_is_profile() {
   emulate -L zsh
   # No /: `work/` names the same directory as `work` but would slip past the .loaded check.
-  [[ -n "$1" && "$1" != bin && "$1" != default && "$1" != [._]* && "$1" != */* && -d "$(_cc_base)/$1" ]]
+  # So would `WORK` or a decomposed `café`, which -d finds on macOS: the name must be the folder's own.
+  local -a names=("$(_cc_base)"/*(/N:t))
+  [[ -n "$1" && "$1" != bin && "$1" != default && "$1" != [._]* && "$1" != */* ]] && (( ${names[(Ie)$1]} ))
 }
 
 _cc_loaded() {

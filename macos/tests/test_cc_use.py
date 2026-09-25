@@ -621,3 +621,33 @@ def test__load__refuses_to_overwrite_the_stash_with_a_profile_login(machine):
     with pytest.raises(cc_use.SwapError, match=r'recorded default \(me@example.com\); not swapping'):
         cc_use.load('other')
     assert machine['keychain'][cc_use.HOME_STASH_SERVICE] == HOME_SECRET
+
+
+@pytest.mark.parametrize('typed', ['WORK', 'Work'])
+def test__load__rejects_a_name_that_differs_from_the_profile_folder_in_case(machine, typed):
+    # Arrange: the folder is found case-insensitively, but Claude Code files `cc work`'s login under the exact path.
+    # Act / Assert
+    with pytest.raises(cc_use.SwapError, match='no such profile'):
+        cc_use.load(typed)
+    assert machine['keychain'][cc_use.DEFAULT_SERVICE] == HOME_SECRET
+    assert cc_use.loaded_profile() is None
+
+
+def test__load__decomposed_name_of_the_loaded_profile_does_not_swap_it_again(machine):
+    # Arrange: cafe is loaded, then a session rotates its token in the slot.
+    composed, decomposed = 'caf\u00e9', 'cafe\u0301'
+    (machine['profiles'] / composed).mkdir()
+    (machine['profiles'] / composed / '.claude.json').write_text(json.dumps({'oauthAccount': WORK_ACCOUNT}))
+    machine['keychain'][cc_use._owner_service(composed)] = WORK_SECRET
+    cc_use.load(composed)
+    rotated = json.dumps({'claudeAiOauth': {'accessToken': 'work-at-2', 'refreshToken': 'work-rt-2'}})
+    machine['keychain'][cc_use.DEFAULT_SERVICE] = rotated
+    machine['identities']['work-at-2'] = 'uuid-work'
+
+    # Act: the same profile, typed decomposed.
+    with pytest.raises(cc_use.SwapError, match='no such profile'):
+        cc_use.load(decomposed)
+
+    # Assert: the live, rotated login stays in the slot rather than being swapped for the stale copy.
+    assert machine['keychain'][cc_use.DEFAULT_SERVICE] == rotated
+    assert cc_use.loaded_profile() == composed

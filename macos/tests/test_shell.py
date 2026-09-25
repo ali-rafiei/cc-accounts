@@ -217,6 +217,32 @@ def test__cc__refuses_the_loaded_profile_named_with_a_trailing_slash(home):
     assert 'CONFIG=' not in out
 
 
+@pytest.mark.parametrize('typed', ['WORK', 'Work'])
+def test__cc__refuses_the_loaded_profile_named_in_another_case(home, typed):
+    # Arrange: macOS folders are case-insensitive, so `cc WORK` finds the loaded profile's folder.
+    (home / '.claude-profiles' / 'work').mkdir()
+    (home / '.claude-profiles' / '.loaded').write_text('work\n')
+
+    # Act
+    out = _zsh(f'cc {typed} -p hi', home, check=False)
+
+    # Assert
+    assert 'CONFIG=' not in out
+
+
+def test__cc__refuses_the_loaded_profile_typed_in_decomposed_unicode(home):
+    # Arrange: Claude Code hashes the NFC form, so a decomposed name reaches the loaded profile's own login.
+    composed, decomposed = 'caf\u00e9', 'cafe\u0301'
+    (home / '.claude-profiles' / composed).mkdir()
+    (home / '.claude-profiles' / '.loaded').write_text(composed + '\n')
+
+    # Act
+    out = _zsh(f'cc {decomposed} -p hi', home, check=False)
+
+    # Assert
+    assert 'CONFIG=' not in out
+
+
 def test__cc__returns_claudes_exit_status(home):
     # Arrange
     (home / '.claude-profiles' / 'work').mkdir()
