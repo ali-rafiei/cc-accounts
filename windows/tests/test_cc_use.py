@@ -501,6 +501,31 @@ def test__load__refuses_to_overwrite_the_stash_with_a_profile_login(machine):
     assert machine['stash'].read_text() == HOME_SECRET
 
 
+@pytest.mark.parametrize('content', ['', '{"oauthAccount": ', '[]', 'null'])
+def test__status__reports_a_corrupt_global_config_as_a_swap_error(machine, content):
+    # Arrange
+    machine['global_config'].write_text(content)
+
+    # Act / Assert
+    with pytest.raises(cc_use.SwapError, match='.claude.json'):
+        cc_use.status()
+
+
+def test__load__default_refuses_a_non_object_account_record_before_writing(machine):
+    # Arrange: work is loaded and the stashed account record is a JSON list, not an object.
+    cc_use.load('work')
+    (machine['profiles'] / '.home-account.json').write_text('[]')
+
+    # Act
+    with pytest.raises(cc_use.SwapError, match='home-account'):
+        cc_use.load(None)
+
+    # Assert
+    assert machine['default'].read_text() == WORK_SECRET
+    assert json.loads(machine['global_config'].read_text())['oauthAccount'] == WORK_ACCOUNT
+    assert cc_use.loaded_profile() == 'work'
+
+
 class _RedirectingProfileServer(http.server.BaseHTTPRequestHandler):
     seen_auth: list = []
 

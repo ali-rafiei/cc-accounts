@@ -320,9 +320,14 @@ def _write_loaded(profile: str | None) -> None:
 def _read_json(path: Path) -> dict:
     try:
         # utf-8-sig: Notepad and Windows PowerShell 5.1 save UTF-8 with a BOM, which json.loads rejects.
-        return json.loads(path.read_text(encoding='utf-8-sig'))
+        data = json.loads(path.read_text(encoding='utf-8-sig'))
     except FileNotFoundError as exc:
         raise SwapError(f'missing {path}') from exc
+    except ValueError as exc:  # bad JSON, or bytes that are not UTF-8
+        raise SwapError(f'{path} is not valid JSON ({exc}); not touching it') from exc
+    if not isinstance(data, dict):
+        raise SwapError(f'{path} holds {type(data).__name__}, not a JSON object; not touching it')
+    return data
 
 
 def _read_secret(path: Path) -> str | None:
