@@ -39,14 +39,16 @@ function Install-Scripts {
         $psLine = ". `"`$HOME\.claude-profiles\profiles.ps1`"  $marker"
         $bashLine = "source `"`$HOME/.claude-profiles/profiles.sh`"  $marker"
     } else {
-        $bashDest = $dest -replace '\\', '/'
-        $psLine = "`$env:CLAUDE_PROFILES = '$dest'; . '$dest\profiles.ps1'  $marker"
+        # Quoted for each shell, so a path like C:\Users\O'Brien neither breaks nor injects.
+        $psDest = $dest -replace "'", "''"
+        $bashDest = ($dest -replace '\\', '/') -replace "'", "'\''"
+        $psLine = "`$env:CLAUDE_PROFILES = '$psDest'; . '$psDest\profiles.ps1'  $marker"
         $bashLine = "export CLAUDE_PROFILES='$bashDest'; source '$bashDest/profiles.sh'  $marker"
     }
-    foreach ($path in $psProfiles) { Add-LineOnce $path $psLine 'profiles.ps1' }
-    Add-LineOnce $bashrc $bashLine 'profiles.sh'
+    foreach ($path in $psProfiles) { Add-LineOnce $path $psLine 'profiles.ps1' "`r`n" }
+    Add-LineOnce $bashrc $bashLine 'profiles.sh' "`n"
 
-    $policy = Get-ExecutionPolicy
+    $policy = Get-ProfileExecutionPolicy
     if ($policy -in @('Restricted', 'AllSigned')) {
         Write-Warning "PowerShell's execution policy is $policy, so your profile will not load these commands. Allow local scripts with: Set-ExecutionPolicy -Scope CurrentUser RemoteSigned"
     }
@@ -109,28 +111,65 @@ function Copy-WithBackup([string]$source, [string]$target) {
 }
 
 # Adds the line unless the file already loads this script, by our marker or a hand-written line.
-function Add-LineOnce([string]$path, [string]$line, [string]$scriptName) {
+# It is appended in the file's own encoding: UTF-8 bytes added to a UTF-16 profile (what
+# Windows PowerShell 5.1's `>` writes) would read back as garbage.
+function Add-LineOnce([string]$path, [string]$line, [string]$scriptName, [string]$newline) {
     if (Test-Path $path) {
         $text = Get-Content $path -Raw
         if ($text -and ($text.Contains($marker) -or $text.Contains(".claude-profiles\$scriptName") -or $text.Contains(".claude-profiles/$scriptName"))) {
             return
         }
+        $encoding = Get-BomEncoding $path
+        if (-not $encoding) { $encoding = New-Object System.Text.UTF8Encoding $false }
     } else {
         New-Item -ItemType File -Force -Path $path | Out-Null
+        # A BOM makes 5.1 read a non-ASCII folder name as UTF-8; bash would choke on one.
+        $encoding = New-Object System.Text.UTF8Encoding ($newline -eq "`r`n")
     }
-    [System.IO.File]::AppendAllText($path, [Environment]::NewLine + $line + [Environment]::NewLine)
+    [System.IO.File]::AppendAllText($path, $newline + $line + $newline, $encoding)
     Write-Output "added to ${path}: $line"
 }
 
-# Rewrites the file in place, so a symlinked profile stays a symlink.
+# Rewrites the file in place, so a symlinked profile stays a symlink, and in its own encoding
+# and line endings, so the rest of the file comes back byte for byte.
 function Remove-MarkedLines([string]$path) {
     if (-not (Test-Path $path)) { return }
-    $lines = [System.IO.File]::ReadAllLines($path)
-    $kept = @($lines | Where-Object { -not $_.Contains($marker) })
-    if ($kept.Count -eq $lines.Count) { return }
-    while ($kept.Count -gt 0 -and $kept[-1] -eq '') { $kept = @($kept | Select-Object -SkipLast 1) }
-    [System.IO.File]::WriteAllLines($path, [string[]]$kept)
+    # Latin-1 maps each byte to one character, so a file with no BOM (UTF-8 or the ANSI code
+    # page, which cannot be told apart) round-trips exactly.
+    $encoding = Get-BomEncoding $path
+    if (-not $encoding) { $encoding = [System.Text.Encoding]::GetEncoding(28591) }
+    $text = [System.IO.File]::ReadAllText($path, $encoding)
+    $kept = [regex]::Replace($text, '(?m)^[^\r\n]*' + [regex]::Escape($marker) + '[^\r\n]*(\r?\n|$)', '')
+    if ($kept -eq $text) { return }
+    $kept = $kept.TrimEnd([char[]]"`r`n")
+    if ($kept) { $kept += $(if ($text.Contains("`r`n")) { "`r`n" } else { "`n" }) }
+    [System.IO.File]::WriteAllText($path, $kept, $encoding)
     Write-Output "removed the claude-multi-account line from $path"
+}
+
+# The encoding a byte-order mark names, or $null when the file has none.
+function Get-BomEncoding([string]$path) {
+    $bytes = [System.IO.File]::ReadAllBytes($path)
+    if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+        return New-Object System.Text.UTF8Encoding $true
+    }
+    if ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFF -and $bytes[1] -eq 0xFE) { return [System.Text.Encoding]::Unicode }
+    if ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFE -and $bytes[1] -eq 0xFF) { return [System.Text.Encoding]::BigEndianUnicode }
+    return $null
+}
+
+# The policy a new shell loads the profile under. Get-ExecutionPolicy alone includes this
+# process's scope, which is Bypass when the installer runs as `-ExecutionPolicy Bypass -File`.
+function Get-ProfileExecutionPolicy {
+    foreach ($scope in 'MachinePolicy', 'UserPolicy', 'CurrentUser', 'LocalMachine') {
+        $policy = Get-ExecutionPolicy -Scope $scope
+        if ($policy -ne 'Undefined') { return $policy }
+    }
+    # Nothing set anywhere: Windows PowerShell on a desktop edition of Windows is Restricted.
+    if ($PSVersionTable.PSEdition -eq 'Desktop' -and (Get-CimInstance Win32_OperatingSystem).ProductType -eq 1) {
+        return 'Restricted'
+    }
+    return 'RemoteSigned'
 }
 
 function Invoke-Python {

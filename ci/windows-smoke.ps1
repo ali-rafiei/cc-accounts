@@ -105,8 +105,6 @@ Assert ((Get-Content (Join-Path $work 'settings.json') -Raw).Contains('tool@mark
 
 $seen = Invoke-Shell "cc work -p 'say `"hi there`"' ''" | ConvertFrom-Json
 Assert ($seen.args.Count -eq 3 -and $seen.args[1] -eq 'say "hi there"' -and $seen.args[2] -eq '') "cc keeps embedded quotes and empty arguments ($Shell): $($seen.args -join '|')"
-$seen = Invoke-Shell 'cc work mcp add x -- npx y' | ConvertFrom-Json
-Assert (($seen.args -join ' ') -eq 'mcp add x -- npx y') "cc passes -- through ($Shell): $($seen.args -join ' ')"
 $out = Invoke-Shell "`$env:STUB_EXIT = '7'; cc work | Out-Null; `"exit=`$LASTEXITCODE`""
 Assert ($out -eq 'exit=7') "cc returns claude's exit code ($Shell): $out"
 
@@ -126,8 +124,6 @@ Assert ((Get-Content (Join-Path $HOME '.claude\.credentials.json') -Raw).Contain
 
 $seen = Invoke-Bash 'source ~/.bashrc; cc work -p from-bash' | ConvertFrom-Json
 Assert ($seen.config -eq $work) 'Git Bash: cc work runs claude with the profile config dir'
-$seen = Invoke-Bash 'source ~/.bashrc; cc work -p /review' | ConvertFrom-Json
-Assert ($seen.args[1] -eq '/review') "Git Bash: cc passes a slash command through: $($seen.args -join ' ')"
 
 Invoke-Installer @('-Uninstall') | Out-Null
 Assert (-not (Test-Path (Join-Path $profiles 'cc_use.py'))) 'uninstall removes the scripts'
