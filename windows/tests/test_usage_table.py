@@ -5,6 +5,17 @@ import pytest
 import usage_table
 
 
+@pytest.fixture(autouse=True)
+def isolate_machine(tmp_path_factory, monkeypatch):
+    # No test may reach the real claude or the real ~/.claude.json, even through a bug.
+    machine = tmp_path_factory.mktemp('machine')
+    (machine / 'empty-bin').mkdir()
+    monkeypatch.setenv('PATH', str(machine / 'empty-bin'))
+    monkeypatch.setenv('HOME', str(machine))
+    monkeypatch.setenv('USERPROFILE', str(machine))
+    monkeypatch.setattr(usage_table, 'PROFILES_DIR', machine / '.claude-profiles')
+
+
 @pytest.fixture
 def profiles(tmp_path, monkeypatch):
     for name in ('personal', 'work', 'bin', '_scratch', '.hidden'):
