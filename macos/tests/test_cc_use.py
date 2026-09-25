@@ -561,3 +561,49 @@ def test__load__refuses_a_default_login_with_no_oauth_account(machine, online):
     assert machine['keychain'][cc_use.DEFAULT_SERVICE] == HOME_SECRET
     assert cc_use.HOME_STASH_SERVICE not in machine['keychain']
     assert not (machine['profiles'] / '.home-account.json').exists()
+
+
+def _killed_mid_swap(machine, config_account):
+    """The state a swap to work leaves when killed after the slot write and before .loaded."""
+    machine['keychain'][cc_use.HOME_STASH_SERVICE] = HOME_SECRET
+    (machine['profiles'] / '.home-account.json').write_text(json.dumps(HOME_ACCOUNT))
+    machine['keychain'][cc_use.DEFAULT_SERVICE] = WORK_SECRET
+    machine['global_config'].write_text(json.dumps({'oauthAccount': config_account}))
+
+
+def test__forget__refuses_when_the_slot_holds_another_account(machine):
+    # Arrange: the stash is the only copy of the user's login, and .loaded never got written.
+    _killed_mid_swap(machine, HOME_ACCOUNT)
+
+    # Act / Assert
+    with pytest.raises(cc_use.SwapError, match=r'recorded default \(me@example.com\); not deleting'):
+        cc_use.forget()
+    assert machine['keychain'][cc_use.HOME_STASH_SERVICE] == HOME_SECRET
+    assert (machine['profiles'] / '.home-account.json').exists()
+
+
+def test__forget__offline_refuses_when_the_slot_login_is_not_the_stashed_one(machine):
+    # Arrange
+    _killed_mid_swap(machine, HOME_ACCOUNT)
+    machine['identities'].clear()
+
+    # Act / Assert
+    with pytest.raises(cc_use.SwapError, match='could not confirm'):
+        cc_use.forget()
+    assert machine['keychain'][cc_use.HOME_STASH_SERVICE] == HOME_SECRET
+
+
+def test__load__refuses_to_overwrite_the_stash_with_a_profile_login(machine):
+    # Arrange: the killed swap also wrote work's account into ~/.claude.json, so it looks consistent.
+    _killed_mid_swap(machine, WORK_ACCOUNT)
+    other_secret = json.dumps({'claudeAiOauth': {'accessToken': 'other-at', 'refreshToken': 'other-rt'}})
+    (machine['profiles'] / 'other').mkdir()
+    (machine['profiles'] / 'other' / '.claude.json').write_text(
+        json.dumps({'oauthAccount': {'accountUuid': 'uuid-other', 'emailAddress': 'other@example.com'}})
+    )
+    machine['keychain'][cc_use._owner_service('other')] = other_secret
+
+    # Act / Assert
+    with pytest.raises(cc_use.SwapError, match=r'recorded default \(me@example.com\); not swapping'):
+        cc_use.load('other')
+    assert machine['keychain'][cc_use.HOME_STASH_SERVICE] == HOME_SECRET

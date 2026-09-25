@@ -160,6 +160,12 @@ def forget() -> str:
     loaded = loaded_profile()
     if loaded is not None:
         raise SwapError(f'{loaded} is loaded, so the stash holds your only login; run `cc-use default` first')
+    # A swap killed before it wrote .loaded leaves a profile in the slot and your login only in the stash.
+    if _keychain_get(HOME_STASH_SERVICE) is not None:
+        current = _keychain_get(DEFAULT_SERVICE)
+        if current is None:
+            raise SwapError('the default slot holds no login, so the stash is your only copy; not deleting it')
+        _verify_owner(current, None, doing='deleting the stash')
     _keychain_delete(HOME_STASH_SERVICE)
     HOME_ACCOUNT_FILE.unlink(missing_ok=True)
     return 'deleted the stashed copy of your login; your default login is untouched'
@@ -215,27 +221,38 @@ def _alive(pid: int) -> bool:
     return True
 
 
-def _verify_owner(current: str, owner: str | None) -> None:
+def _verify_owner(current: str, owner: str | None, doing: str = 'swapping') -> None:
     """Refuse when the slot's login is not the account cc-use last put there.
 
     Writing it back would otherwise hand one account's login to another's profile.
     """
-    expected = _profile_account(owner) if owner else _read_json(GLOBAL_CONFIG).get('oauthAccount') or {}
+    stored = _keychain_get(_owner_service(owner))
+    expected = _profile_account(owner) if owner else _home_account(stored)
     identity = _fetch_identity(_oauth(current).get('accessToken'))
     if identity is not None:
         if identity['uuid'] != expected.get('accountUuid'):
             raise SwapError(
                 f'the default slot holds {identity["email"]}, but cc-use recorded '
-                f'{_label(owner)} ({expected.get("emailAddress")}); not swapping'
+                f'{_label(owner)} ({expected.get("emailAddress")}); not {doing}'
             )
         return
-    stored = _keychain_get(_owner_service(owner))
     if stored is None or _oauth(stored).get('refreshToken') == _oauth(current).get('refreshToken'):
         return
     raise SwapError(
         'could not confirm whose login is in the default slot (offline, or its '
         'access token expired); send one message in any default session, then retry'
     )
+
+
+def _home_account(stash: str | None) -> dict:
+    """The user's own account: the stash's record once there is a stash.
+
+    ~/.claude.json is not proof, since a swap killed before .loaded may already have
+    written the loaded profile's account there.
+    """
+    if stash is not None and HOME_ACCOUNT_FILE.exists():
+        return _read_json(HOME_ACCOUNT_FILE)
+    return _read_json(GLOBAL_CONFIG).get('oauthAccount') or {}
 
 
 def _fetch_identity(access_token: str | None) -> dict | None:
