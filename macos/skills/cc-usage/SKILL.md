@@ -28,8 +28,8 @@ No column explanations, no summary of the numbers, no restating rows in prose.
 ## The only additions allowed
 
 - **A row says `not logged in`**: one line, `` `cc-login <profile>` to re-auth ``. It
-  opens a fresh private browser window so the flow cannot reuse whichever account the
-  browser is already signed into.
+  opens a private browser window on a throwaway profile, so the flow cannot reuse whichever
+  account the browser, or an earlier login, is already signed into.
 - **The user asked which account to use**: name one account in one line. Pick the lowest
   `WEEK`, ignoring accounts whose reset is imminent, and check `OTHER LIMITS` too: a
   per-model cap at 100% makes that model unusable even when `WEEK` is low.

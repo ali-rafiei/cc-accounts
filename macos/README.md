@@ -16,7 +16,7 @@ Shell commands (zsh):
 |---|---|
 | `cc-add <profile>` | Create a profile and log it in |
 | `cc <profile> [args]` | Run Claude Code as that account (`cc default` runs your normal login) |
-| `cc-login <profile>` | Log a profile in again. On macOS the sign-in page opens in a fresh private window of Google Chrome (or the browser `CC_LOGIN_BROWSER` names), so it can't pick up whichever account your browser is signed into |
+| `cc-login <profile>` | Log a profile in again. The sign-in page opens in a new private browser window on a throwaway profile (Google Chrome, or the browser `CC_LOGIN_BROWSER` names), so it can't pick up whichever account your browser, or an earlier login, is signed into |
 | `ccusage-all` | One table of session and weekly usage for every account, soonest reset first |
 | `cc-use <profile>` | macOS: put that account's login in the default slot, so VS Code and plain `claude` run as it. `cc-use default` puts yours back |
 
@@ -44,7 +44,7 @@ has loaded into your default login.
 - Claude Code (the `claude` CLI) with your normal account already logged in
 - zsh and Python 3.9+. On macOS, zsh is the default shell and `/usr/bin/python3` is enough
   once the Command Line Tools are installed.
-- macOS for `cc-use` and for `cc-login`'s private window. The rest only needs zsh, so it
+- macOS for `cc-use` and for `cc-login`'s throwaway browser window. The rest only needs zsh, so it
   should work on Linux, but it has only been tested on macOS.
 
 ## Install
