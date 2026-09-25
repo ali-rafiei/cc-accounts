@@ -41,7 +41,9 @@ On a `cc-use:` error, relay the line; it names the cause. The refusals are delib
   to delete by hand, the user's own login changed since cc-use stashed it; deleting them is
   for the user to do if they changed it on purpose, never for you to do for them.
 - **`forget` refuses**: it keeps the stash whenever it can't prove the default slot holds the
-  user's own login again. That is the safe side; relay the reason.
+  user's own login again. That is the safe side; relay the reason. Exit status 3 means it
+  could not check (offline); 1 means another account is in the slot, so the stash may be the
+  user's only login: suggest `cc-use default`, never deleting the stash.
 - **Could not confirm whose login it is**: offline, or an expired access token. One message
   in any default session refreshes it; then retry.
 - **A file stayed locked by another program**: something (often antivirus or a sync tool)

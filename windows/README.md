@@ -51,14 +51,16 @@ usual fix is `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
 
 `install.ps1` copies five files into `~\.claude-profiles` (or `$env:CLAUDE_PROFILES`). It
 then adds one line to your PowerShell profiles (both Windows PowerShell's and PowerShell
-7's) and to `~\.bashrc` for Git Bash, unless the line is already there. It backs up any
-file it would overwrite. Run it again after a `git pull` to update.
+7's) and to `~\.bashrc` for Git Bash, unless the line is already there. If you have a
+`~\.bash_profile` that doesn't load `~\.bashrc`, it adds the line there too. A relative or
+`~` path in `$env:CLAUDE_PROFILES` is turned into a full path first. It backs up any file it
+would overwrite. Run it again after a `git pull` to update.
 
 Git Bash starts a login shell, which reads `~/.bash_profile` (or `~/.bash_login` or
 `~/.profile`), not `~/.bashrc`. If you have none of those, the first Git Bash window after
 installing warns that it found `~/.bashrc` but no `~/.bash_profile` and creates one that
-loads it; that is expected. If you already have one that doesn't load `~/.bashrc`, add
-`source ~/.bashrc` to it, or the commands won't be there in Git Bash.
+loads it; that is expected. If you already have one that doesn't load `~/.bashrc`, the
+installer adds its line to that file as well.
 
 Then add the skills, either as a plugin, from PowerShell or Git Bash:
 
@@ -121,7 +123,9 @@ other settings stay its own.
 profile. VS Code and plain `claude` use the default one, plus the account details in
 `~\.claude.json`. `cc-use work` swaps in work's login and account details. New sessions
 start on it straight away, and running ones pick it up on their next message. Your own login
-waits in `~\.claude-profiles\.home-credentials.json` until `cc-use default` puts it back.
+waits in `~\.claude-profiles\.home-credentials.json` until `cc-use default` puts it back and
+deletes that spare copy. If a swap is cut off part way (a closed window, say), `cc-use
+default` works out which profile's login is in the slot and finishes putting yours back.
 
 Only one live copy of a login exists at a time. Claude Code refreshes tokens as it goes, and
 a refresh can leave an older copy dead, so `cc-use` moves a login around instead of
@@ -142,9 +146,11 @@ back to its owner. A few checks guard the swap:
 
 ## Things to know
 
-- Profile names use letters, digits, spaces and `. _ -`, start with a letter or digit, and
-  don't end in a dot or space (Windows can't name a folder that way reliably). A folder with
-  any other name is not treated as a profile.
+- A new profile's name (`cc-add`) uses letters, digits, spaces and `. _ -`, starts with a
+  letter or digit, and doesn't end in a dot or space. A folder you made before this rule, such
+  as `alice@corp` or `josé`, still works, as long as it contains no `\`, `/` or `:`, doesn't
+  end in a dot or space, and doesn't start with `.` or `_`. `default` and `bin` are reserved
+  in any case.
 - PowerShell swallows a bare `--` before `cc` sees it; write `'--'` to pass one through to
   Claude. Git Bash rewrites an argument that looks like a path, so `cc work -p /review` arrives
   as `C:/Program Files/Git/review`; write `//review` instead.
@@ -173,9 +179,11 @@ cc-use default              # if a profile is loaded; uninstall refuses otherwis
 ```
 
 That removes the scripts, the lines in your PowerShell profiles and `~\.bashrc`, and any
-skill links from `-Skills`. It also deletes the spare copy of your login that `cc-use` kept,
-once it can confirm your own login is back in the default slot; if it can't (offline, say),
-it keeps the copy, which is harmless, and prints the command to delete it later. With a
+skill links from `-Skills`. If `cc-use` still holds a copy of your login (normally it
+doesn't, since `cc-use default` deletes it), uninstall deletes it once it can confirm your own
+login is back in the default slot. If another account is in the slot, uninstall stops before
+removing anything, because that copy may be your only login: run `cc-use default` first. If
+it just can't check (offline), it keeps the copy and prints the command to delete it later. With a
 custom `CLAUDE_PROFILES`, run the uninstall from a PowerShell window that has it set (any new
 window does, until the uninstall removes the line). If you installed the skills as a plugin,
 remove it too, from PowerShell or Git Bash (or as `/plugin uninstall ...` and
