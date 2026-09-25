@@ -4,6 +4,7 @@ import http.server
 import io
 import json
 import os
+import signal
 import threading
 import time
 import unicodedata
@@ -593,15 +594,32 @@ def test__forget__offline_refuses_when_the_slot_login_is_not_the_stashed_one(mac
     assert machine['keychain'][cc_use.HOME_STASH_SERVICE] == HOME_SECRET
 
 
-def test__load__names_the_way_out_when_the_stash_no_longer_matches_your_login(machine):
-    # Arrange: a killed swap left work in the slot while the stash still holds your own login.
+def test__load__names_cc_use_default_when_a_killed_swap_left_a_profile_in_the_slot(machine):
+    # Arrange: a killed swap left work in the slot while the stash holds the only copy of your login.
     _killed_mid_swap(machine, WORK_ACCOUNT)
 
     # Act
     with pytest.raises(cc_use.SwapError) as refused:
         cc_use.load('work')
 
-    # Assert: the refusal must say how to get unstuck without reading the source.
+    # Assert: deleting the stash here would lose your login, so the way out is to finish the restore.
+    message = str(refused.value)
+    assert 'cc-use default' in message
+    assert 'delete-generic-password' not in message
+
+
+def test__load__names_the_way_out_when_the_slot_matches_no_account_cc_use_knows(machine):
+    # Arrange: a stash exists, and the default login was signed in as a stranger on purpose.
+    stranger = json.dumps({'claudeAiOauth': {'accessToken': 'stranger-at', 'refreshToken': 'stranger-rt'}})
+    machine['identities']['stranger-at'] = 'uuid-stranger'
+    _killed_mid_swap(machine, HOME_ACCOUNT)
+    machine['keychain'][cc_use.DEFAULT_SERVICE] = stranger
+
+    # Act
+    with pytest.raises(cc_use.SwapError) as refused:
+        cc_use.load('work')
+
+    # Assert
     message = str(refused.value)
     assert 'security delete-generic-password' in message
     assert cc_use.HOME_STASH_SERVICE in message
@@ -703,3 +721,144 @@ def test__load__failed_loaded_write_leaves_no_partial_record(machine, monkeypatc
     # Assert
     assert cc_use.loaded_profile() is None
     assert machine['keychain'][cc_use.DEFAULT_SERVICE] == HOME_SECRET
+
+
+def test__load__default_deletes_the_stash_once_your_login_is_back(machine):
+    # Arrange
+    cc_use.load('work')
+
+    # Act
+    cc_use.load(None)
+
+    # Assert: the slot now holds your login, so the stash is only a stale copy.
+    assert cc_use.HOME_STASH_SERVICE not in machine['keychain']
+    assert not (machine['profiles'] / '.home-account.json').exists()
+    assert machine['keychain'][cc_use.DEFAULT_SERVICE] == HOME_SECRET
+
+
+def test__load__accepts_a_default_login_signed_in_as_another_account_after_a_round_trip(machine):
+    # Arrange: after a round trip, the default login is signed in as a different account on purpose.
+    cc_use.load('work')
+    cc_use.load(None)
+    other_secret = json.dumps({'claudeAiOauth': {'accessToken': 'other-at', 'refreshToken': 'other-rt'}})
+    other_account = {'accountUuid': 'uuid-other', 'emailAddress': 'other@example.com'}
+    machine['identities']['other-at'] = 'uuid-other'
+    machine['keychain'][cc_use.DEFAULT_SERVICE] = other_secret
+    machine['global_config'].write_text(json.dumps({'oauthAccount': other_account}))
+
+    # Act
+    cc_use.load('work')
+
+    # Assert
+    assert machine['keychain'][cc_use.HOME_STASH_SERVICE] == other_secret
+    assert json.loads((machine['profiles'] / '.home-account.json').read_text()) == other_account
+
+
+def test__load__default_finishes_a_swap_killed_before_loaded_was_written(machine):
+    # Arrange: work's login is in the slot, and a session has since rotated it.
+    _killed_mid_swap(machine, WORK_ACCOUNT)
+    rotated = json.dumps({'claudeAiOauth': {'accessToken': 'work-at-2', 'refreshToken': 'work-rt-2'}})
+    machine['identities']['work-at-2'] = 'uuid-work'
+    machine['keychain'][cc_use.DEFAULT_SERVICE] = rotated
+
+    # Act
+    cc_use.load(None)
+
+    # Assert
+    keychain = machine['keychain']
+    assert keychain[cc_use.DEFAULT_SERVICE] == HOME_SECRET
+    assert keychain[cc_use._owner_service('work')] == rotated
+    assert json.loads(machine['global_config'].read_text())['oauthAccount'] == HOME_ACCOUNT
+    assert cc_use.loaded_profile() is None
+
+
+def test__load__default_offline_refuses_to_guess_after_a_killed_swap(machine):
+    # Arrange
+    _killed_mid_swap(machine, WORK_ACCOUNT)
+    machine['identities'].clear()
+
+    # Act / Assert
+    with pytest.raises(cc_use.SwapError, match='could not confirm'):
+        cc_use.load(None)
+    assert machine['keychain'][cc_use.HOME_STASH_SERVICE] == HOME_SECRET
+
+
+def test__load__default_restores_when_the_loaded_profile_was_deleted(machine):
+    # Arrange: work is loaded, then its folder is deleted.
+    cc_use.load('work')
+    work_item = cc_use._owner_service('work')
+    for child in (machine['profiles'] / 'work').iterdir():
+        child.unlink()
+    (machine['profiles'] / 'work').rmdir()
+
+    # Act
+    cc_use.load(None)
+
+    # Assert: your login is back, and the deleted profile's login is kept in its own item.
+    assert machine['keychain'][cc_use.DEFAULT_SERVICE] == HOME_SECRET
+    assert machine['keychain'][work_item] == WORK_SECRET
+    assert cc_use.loaded_profile() is None
+
+
+def test__load__rolls_back_a_swap_interrupted_by_sigterm(machine, monkeypatch):
+    # Arrange: SIGTERM arrives right after the slot write, before ~/.claude.json and .loaded.
+    keychain = machine['keychain']
+
+    def keychain_set(service, secret):
+        keychain[service] = secret
+        if service == cc_use.DEFAULT_SERVICE and secret == WORK_SECRET:
+            os.kill(os.getpid(), signal.SIGTERM)
+
+    monkeypatch.setattr(cc_use, '_keychain_set', keychain_set)
+
+    # Act
+    with pytest.raises(BaseException) as interrupted:
+        cc_use.load('work')
+
+    # Assert
+    assert not isinstance(interrupted.value, cc_use.SwapError)
+    assert keychain[cc_use.DEFAULT_SERVICE] == HOME_SECRET
+    assert json.loads(machine['global_config'].read_text())['oauthAccount'] == HOME_ACCOUNT
+    assert signal.getsignal(signal.SIGTERM) is signal.SIG_DFL
+
+
+def test__load__attempts_every_restore_when_one_fails(machine, monkeypatch):
+    # Arrange: .loaded fails to write, and so does the Keychain write that would undo the slot.
+    keychain = machine['keychain']
+
+    def keychain_set(service, secret):
+        if service == cc_use.DEFAULT_SERVICE and secret == HOME_SECRET:
+            raise cc_use.SwapError('Keychain write failed')
+        keychain[service] = secret
+
+    def write_loaded(profile):
+        if profile is not None:
+            raise OSError(28, 'No space left on device')
+        cc_use.LOADED_FILE.unlink(missing_ok=True)
+
+    monkeypatch.setattr(cc_use, '_keychain_set', keychain_set)
+    monkeypatch.setattr(cc_use, '_write_loaded', write_loaded)
+
+    # Act: the original error is the one reported.
+    with pytest.raises(OSError, match='No space left'):
+        cc_use.load('work')
+
+    # Assert: ~/.claude.json is still put back.
+    assert json.loads(machine['global_config'].read_text())['oauthAccount'] == HOME_ACCOUNT
+
+
+@pytest.mark.parametrize(
+    ('identities', 'code'), [({}, 3), ({'work-at': 'uuid-work'}, 1)], ids=['could-not-confirm', 'another-account']
+)
+def test__main__forget_exit_code_says_why_it_refused(machine, identities, code):
+    # Arrange
+    _killed_mid_swap(machine, HOME_ACCOUNT)
+    machine['identities'].clear()
+    machine['identities'].update(identities)
+
+    # Act
+    rc = cc_use.main(['forget'])
+
+    # Assert
+    assert rc == code
+    assert machine['keychain'][cc_use.HOME_STASH_SERVICE] == HOME_SECRET

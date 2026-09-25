@@ -424,12 +424,12 @@ def test__install__adds_the_line_when_zshrc_only_has_it_commented_out(tmp_path):
     assert '# claude-multi-account' in (tmp_path / '.zshrc').read_text()
 
 
-def test__uninstall__keeps_going_when_forget_refuses(home):
-    # Arrange: cc-use has a stash, and forget refuses (a stub stands in for cc_use.py so the
-    # real Keychain is never touched).
+def test__uninstall__keeps_going_when_forget_cannot_confirm(home):
+    # Arrange: cc-use has a stash, and forget cannot confirm whose login is in the slot (a stub
+    # stands in for cc_use.py so the real Keychain is never touched).
     dest = home / '.claude-profiles'
     (dest / '.home-account.json').write_text('{}')
-    (dest / 'cc_use.py').write_text('import sys\nprint("cc-use: not deleting it", file=sys.stderr)\nsys.exit(1)\n')
+    (dest / 'cc_use.py').write_text('import sys\nprint("cc-use: could not confirm", file=sys.stderr)\nsys.exit(3)\n')
 
     # Act
     done = _run(['bash', str(REPO / 'install.sh'), '--uninstall'], home, check=False)
@@ -439,6 +439,22 @@ def test__uninstall__keeps_going_when_forget_refuses(home):
     assert not (dest / 'profiles.zsh').exists()
     assert '# claude-multi-account' not in (home / '.zshrc').read_text()
     assert 'security delete-generic-password' in done.stdout
+
+
+def test__uninstall__stops_when_the_stash_holds_your_only_login(home):
+    # Arrange: forget refuses because another account is in the slot (stub cc_use.py, no real Keychain).
+    dest = home / '.claude-profiles'
+    (dest / '.home-account.json').write_text('{}')
+    (dest / 'cc_use.py').write_text('import sys\nprint("cc-use: slot holds work", file=sys.stderr)\nsys.exit(1)\n')
+
+    # Act
+    done = _run(['bash', str(REPO / 'install.sh'), '--uninstall'], home, check=False)
+
+    # Assert: nothing is removed, and the stash is not called harmless.
+    assert done.returncode != 0
+    assert (dest / 'profiles.zsh').exists()
+    assert '# claude-multi-account' in (home / '.zshrc').read_text()
+    assert 'delete-generic-password' not in done.stdout
 
 
 def test__ccusage_all__raw_skips_the_loaded_profiles_own_copy(home):
