@@ -91,6 +91,38 @@ def test__run__refuses_the_profile_cc_use_has_loaded(machine, capfd):
     assert capfd.readouterr().out == ''
 
 
+@pytest.mark.parametrize(
+    'recorded',
+    [
+        'work/',
+        pytest.param('work\\', marks=pytest.mark.skipif(sys.platform != 'win32', reason='a separator on Windows')),
+        'WORK',
+    ],
+)
+def test__run__refuses_the_loaded_profile_under_another_spelling(machine, recorded):
+    # Arrange: every spelling here opens the same folder on Windows.
+    (machine['profiles'] / 'work').mkdir()
+    (machine['profiles'] / '.loaded').write_text(recorded + '\n')
+
+    # Act / Assert
+    with pytest.raises(cc_run.ProfileError, match='loaded into the default login'):
+        cc_run.run('work', [])
+
+
+def test__share__links_under_a_path_cmd_would_split(machine, monkeypatch):
+    # Arrange: & and % mean something to cmd.exe, even inside a folder name.
+    profiles = machine['tmp'] / 'O&Brien%PATH%'
+    profile = profiles / 'work'
+    profile.mkdir(parents=True)
+    monkeypatch.setattr(cc_run, 'PROFILES_DIR', profiles)
+
+    # Act
+    cc_run.share(profile)
+
+    # Assert
+    assert os.path.samefile(profile / 'skills', machine['claude_home'] / 'skills')
+
+
 @pytest.mark.parametrize('name', ['bin', '_scratch', '.hidden', 'missing'])
 def test__run__rejects_names_that_are_not_profiles(machine, name):
     # Arrange
@@ -179,7 +211,7 @@ def test__add__creates_the_profile_and_starts_a_login(machine, capfd):
     assert _seen(capfd)['args'] == ['auth', 'login']
 
 
-@pytest.mark.parametrize('name', ['default', 'bin', '_x', '.x', 'a/b'])
+@pytest.mark.parametrize('name', ['default', 'bin', '_x', '.x', 'a/b', 'x&calc', 'a%PATH%', 'work.', 'work '])
 def test__add__rejects_unusable_names(machine, name):
     # Act / Assert
     with pytest.raises(cc_run.ProfileError, match='not a usable profile name'):

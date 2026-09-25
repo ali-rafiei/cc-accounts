@@ -100,7 +100,7 @@ def test__load__switching_between_profiles_leaves_the_stashed_login_alone(machin
     assert machine['stash'].read_text() == HOME_SECRET
 
 
-@pytest.mark.parametrize('name', ['bin', 'default', '.hidden', '_scratch', 'missing'])
+@pytest.mark.parametrize('name', ['bin', 'default', '.hidden', '_scratch', 'missing', '', 'work/', 'work\\', 'work/.'])
 def test__load__rejects_names_that_are_not_profiles(machine, name):
     # Arrange
     for folder in ('bin', '_scratch', '.hidden'):
@@ -109,6 +109,15 @@ def test__load__rejects_names_that_are_not_profiles(machine, name):
     # Act / Assert
     with pytest.raises(cc_use.SwapError, match='no such profile'):
         cc_use.load(name)
+
+
+def test__load__records_the_profile_under_its_own_spelling(machine):
+    # Act: Windows opens work's folder for WORK too.
+    cc_use.load('WORK')
+
+    # Assert
+    assert cc_use.loaded_profile() == 'work'
+    assert 'already' in cc_use.load('work')
 
 
 def test__load__names_the_fix_for_a_profile_that_never_logged_in(machine):
@@ -297,6 +306,21 @@ def test__lock_dir__takes_over_a_stale_lock(tmp_path):
     # Assert
     assert held
     assert not lock.exists()
+
+
+def test__lock_dir__gives_up_on_a_stale_lock_it_cannot_remove(tmp_path, monkeypatch):
+    # Arrange: a stale lock that is not an empty directory, so rmdir keeps failing.
+    monkeypatch.setattr(cc_use, 'LOCK_TIMEOUT_S', 0.3)
+    lock = tmp_path / 'x.lock'
+    lock.mkdir()
+    (lock / 'stray').write_text('')
+    old = time.time() - 120
+    os.utime(lock, (old, old))
+
+    # Act / Assert
+    with pytest.raises(cc_use.SwapError, match='stayed held'):
+        with cc_use._lock_dir(lock, stale_s=60):
+            pass
 
 
 def test__lock_dir__gives_up_on_a_live_lock(tmp_path, monkeypatch):

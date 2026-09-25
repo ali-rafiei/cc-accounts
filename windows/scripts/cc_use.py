@@ -24,11 +24,12 @@ import urllib.request
 from contextlib import contextmanager
 from pathlib import Path
 
+from cc_run import is_profile_name
+
 PROFILES_DIR = Path(os.environ.get('CLAUDE_PROFILES') or Path.home() / '.claude-profiles').expanduser()
 LOADED_FILE = PROFILES_DIR / '.loaded'
 HOME_ACCOUNT_FILE = PROFILES_DIR / '.home-account.json'
 HOME_STASH_FILE = PROFILES_DIR / '.home-credentials.json'
-RESERVED_NAMES = {'bin', 'default'}
 GLOBAL_CONFIG = Path.home() / '.claude.json'
 DEFAULT_CREDENTIALS = Path.home() / '.claude' / '.credentials.json'
 CREDENTIALS_FILE_NAME = '.credentials.json'
@@ -91,7 +92,9 @@ def load(target: str | None) -> str:
     if target == owner:
         return f'{_label(target)} is already in the default slot'
     if target is not None:
-        _require_profile(target)
+        target = _require_profile(target)
+        if target == owner:
+            return f'{target} is already in the default slot'
         _refuse_if_running(target)
     current = _read_secret(DEFAULT_CREDENTIALS)
     if current is None:
@@ -158,9 +161,13 @@ def _owner_file(profile: str | None) -> Path:
     return PROFILES_DIR / profile / CREDENTIALS_FILE_NAME
 
 
-def _require_profile(name: str) -> None:
-    if name in RESERVED_NAMES or name[:1] in ('.', '_') or not (PROFILES_DIR / name).is_dir():
-        raise SwapError(f'no such profile: {name}')
+def _require_profile(name: str) -> str:
+    """The profile's name as its folder spells it, since Windows opens work's folder for WORK too."""
+    if is_profile_name(name) and (PROFILES_DIR / name).is_dir():
+        for folder in PROFILES_DIR.iterdir():
+            if folder.name.lower() == name.lower():
+                return folder.name
+    raise SwapError(f'no such profile: {name}')
 
 
 def _refuse_if_running(name: str) -> None:
@@ -339,6 +346,10 @@ def _lock_dir(path: Path, stale_s: float):
             break
         except FileExistsError:
             pass
+        # Checked first: a stale lock that cannot be removed (a file, or not empty) would
+        # otherwise be retried forever.
+        if time.monotonic() > deadline:
+            raise SwapError(f'{path.name} stayed held (Claude Code is refreshing a login); retry shortly')
         try:
             held_for = time.time() - path.stat().st_mtime
         except FileNotFoundError:
@@ -349,8 +360,6 @@ def _lock_dir(path: Path, stale_s: float):
             except OSError:
                 time.sleep(0.05)
             continue
-        if time.monotonic() > deadline:
-            raise SwapError(f'{path.name} stayed held (Claude Code is refreshing a login); retry shortly')
         time.sleep(0.25 + random.random() * 0.25)
 
     stop = threading.Event()

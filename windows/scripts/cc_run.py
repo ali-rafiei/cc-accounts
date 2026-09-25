@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -22,6 +23,9 @@ PROFILES_DIR = Path(os.environ.get('CLAUDE_PROFILES') or Path.home() / '.claude-
 LOADED_FILE = PROFILES_DIR / '.loaded'
 CLAUDE_HOME = Path.home() / '.claude'
 RESERVED_NAMES = {'bin', 'default'}
+# Letters, digits and . _ - or space inside. Nothing a shell or cmd.exe reads as syntax, and
+# no trailing dot or space, which Windows drops, so a name opens only its own folder.
+PROFILE_NAME = re.compile(r'[A-Za-z0-9](?:[A-Za-z0-9._ -]*[A-Za-z0-9_-])?')
 SHARED_DIRS = ('skills', 'plugins')
 MIRRORED_SETTINGS = ('enabledPlugins', 'extraKnownMarketplaces')
 LOGIN_HINT = (
@@ -71,7 +75,7 @@ def run(profile: str, claude_args: list[str]) -> int:
     env = {k: v for k, v in os.environ.items() if k != 'CLAUDE_CONFIG_DIR'}
     if profile != 'default':
         profile_dir = require_profile(profile)
-        if loaded_profile() == profile:
+        if _is_loaded(profile_dir):
             raise ProfileError(
                 f'{profile} is loaded into the default login by cc-use: run `cc default`, or `cc-use default` first'
             )
@@ -107,13 +111,7 @@ def list_profiles() -> list[str]:
 
 
 def is_profile_name(name: str) -> bool:
-    return (
-        bool(name)
-        and name not in RESERVED_NAMES
-        and name[:1] not in ('.', '_')
-        and '/' not in name
-        and '\\' not in name
-    )
+    return PROFILE_NAME.fullmatch(name) is not None and name.lower() not in RESERVED_NAMES
 
 
 def require_profile(name: str) -> Path:
@@ -128,6 +126,13 @@ def loaded_profile() -> str | None:
         return LOADED_FILE.read_text().strip() or None
     except FileNotFoundError:
         return None
+
+
+def _is_loaded(profile_dir: Path) -> bool:
+    # By folder, not by string: Windows opens work's folder for WORK and work/ too.
+    loaded = loaded_profile()
+    folder = PROFILES_DIR / loaded if loaded else None
+    return folder is not None and folder.is_dir() and os.path.samefile(folder, profile_dir)
 
 
 def _mirror_plugin_settings(target_path: Path) -> None:
@@ -145,9 +150,13 @@ def _link_dir(link: Path, target: Path) -> None:
     if sys.platform != 'win32':
         link.symlink_to(target, target_is_directory=True)
         return
-    done = subprocess.run(['cmd', '/c', 'mklink', '/J', str(link), str(target)], capture_output=True, text=True)
-    if done.returncode != 0:
-        raise ProfileError(f'could not link {link} to {target}: {(done.stdout + done.stderr).strip()}')
+    # Not `cmd /c mklink /J`: cmd.exe reads & and % in a path as syntax.
+    import _winapi
+
+    try:
+        _winapi.CreateJunction(str(target), str(link))
+    except OSError as exc:
+        raise ProfileError(f'could not link {link} to {target}: {exc}') from exc
 
 
 def _claude_executable() -> str:
