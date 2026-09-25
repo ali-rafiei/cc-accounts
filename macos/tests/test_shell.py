@@ -104,6 +104,21 @@ def test__cc__shares_skills_plugins_and_plugin_settings(home):
     assert settings == {'theme': 'light', 'enabledPlugins': {'tool@market': True}}
 
 
+@pytest.mark.parametrize('content', ['{"enabledPlugins": {},}', '[]'], ids=['trailing-comma', 'list'])
+def test__cc__names_an_unreadable_settings_file_instead_of_a_traceback(home, content):
+    # Arrange
+    (home / '.claude-profiles' / 'work').mkdir()
+    (home / '.claude' / 'settings.json').write_text(content)
+
+    # Act
+    out = _zsh('cc work', home)
+
+    # Assert
+    assert 'Traceback' not in out
+    assert 'settings.json' in out
+    assert f'CONFIG={home}/.claude-profiles/work ARGS=' in out.splitlines()  # claude still starts
+
+
 def test__cc__refuses_the_profile_cc_use_has_loaded(home):
     # Arrange
     (home / '.claude-profiles' / 'work').mkdir()

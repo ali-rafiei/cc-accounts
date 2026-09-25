@@ -138,10 +138,18 @@ _cc_share() {
 import json, sys
 from pathlib import Path
 KEYS = ('enabledPlugins', 'extraKnownMarketplaces')
+def read(path):
+    data = json.loads(path.read_text()) if path.exists() else {}
+    if not isinstance(data, dict):
+        raise ValueError('not a JSON object')
+    return data
 source_path = Path.home() / '.claude' / 'settings.json'
-source = json.loads(source_path.read_text()) if source_path.exists() else {}
 target_path = Path(sys.argv[1]) / 'settings.json'
-target = json.loads(target_path.read_text()) if target_path.exists() else {}
+try:
+    source, target = read(source_path), read(target_path)
+except (OSError, ValueError) as exc:
+    # Launch anyway: the profile keeps the plugin settings it had.
+    sys.exit(f'cc: plugin settings not shared, could not read a settings.json ({exc}): {source_path}, {target_path}')
 merged = {**target, **{k: source[k] for k in KEYS if k in source}}
 if merged != target:
     target_path.write_text(json.dumps(merged, indent=2) + '\n')
