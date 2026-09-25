@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import time
+import unicodedata
 
 import pytest
 
@@ -264,3 +265,16 @@ def test__load__recorded_name_matches_the_one_the_shell_guard_compares(machine):
     # Assert
     assert machine['keychain'][cc_use.DEFAULT_SERVICE] == HOME_SECRET
     assert cc_use.loaded_profile() is None
+
+
+def test__owner_service__hashes_the_nfc_form_like_claude_code(machine):
+    # Arrange: Claude Code hashes CLAUDE_CONFIG_DIR after .normalize('NFC'); this name is typed decomposed.
+    decomposed = 'cafe\u0301'
+    composed_dir = unicodedata.normalize('NFC', str(machine['profiles'] / decomposed))
+    expected_digest = hashlib.sha256(composed_dir.encode()).hexdigest()[:8]
+
+    # Act
+    service = cc_use._owner_service(decomposed)
+
+    # Assert
+    assert service == f'Claude Code-credentials-{expected_digest}'

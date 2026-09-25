@@ -19,6 +19,7 @@ import sys
 import tempfile
 import threading
 import time
+import unicodedata
 import urllib.error
 import urllib.request
 from contextlib import contextmanager
@@ -153,7 +154,8 @@ def _owner_service(profile: str | None) -> str:
     """Where a login lives while it is out of the slot: its profile's own item, or the stash."""
     if profile is None:
         return HOME_STASH_SERVICE
-    digest = hashlib.sha256(str(PROFILES_DIR / profile).encode()).hexdigest()[:8]
+    config_dir = unicodedata.normalize('NFC', str(PROFILES_DIR / profile))  # Claude Code hashes the NFC form
+    digest = hashlib.sha256(config_dir.encode()).hexdigest()[:8]
     return f'{DEFAULT_SERVICE}-{digest}'
 
 
