@@ -247,16 +247,27 @@ def test__account_email__reads_utf8_whatever_the_locale_codec(tmp_path):
     assert email == 'me@example.com'
 
 
-@pytest.mark.parametrize('folder', ['Default', 'old & copy', 'x%PATH%'])
-def test__discover__skips_folders_cc_does_not_take_as_profiles(profiles, folder):
-    # Arrange: `cc` and `cc-use` refuse these names, so the table must not probe them either.
-    (profiles / folder).mkdir()
+def test__discover__skips_a_reserved_name_in_any_case(profiles):
+    # Arrange: `cc Default` and `cc-use Default` refuse it, so the table must not probe it either.
+    (profiles / 'Default').mkdir()
 
     # Act
     names = [name for name, _ in usage_table._discover()]
 
     # Assert
     assert names == ['personal', 'work']
+
+
+@pytest.mark.parametrize('folder', ['alice@corp', 'jos\u00e9', 'work+2', "o'brien", '-x', 'old & copy'])
+def test__discover__lists_an_existing_folder_cc_accepts(profiles, folder):
+    # Arrange: a folder made before names were narrowed; cc and cc-use still take it.
+    (profiles / folder).mkdir()
+
+    # Act
+    names = [name for name, _ in usage_table._discover()]
+
+    # Assert
+    assert folder in names
 
 
 def test__discover__probes_the_loaded_profile_through_the_default_login_under_any_spelling(profiles):

@@ -128,6 +128,22 @@ def test__load__rejects_names_that_are_not_profiles(machine, name):
         cc_use.load(name)
 
 
+@pytest.mark.parametrize('folder', ['alice@corp', 'jos\u00e9', 'work+2', "o'brien", '-x'])
+def test__load__accepts_an_existing_folder_made_before_names_were_narrowed(machine, folder):
+    # Arrange
+    profile = machine['profiles'] / folder
+    profile.mkdir()
+    (profile / '.claude.json').write_text(json.dumps({'oauthAccount': WORK_ACCOUNT}))
+    (profile / '.credentials.json').write_text(WORK_SECRET)
+
+    # Act
+    cc_use.load(folder)
+
+    # Assert
+    assert cc_use.loaded_profile() == folder
+    assert machine['default'].read_text() == WORK_SECRET
+
+
 def test__load__records_the_profile_under_its_own_spelling(machine):
     # Act: Windows opens work's folder for WORK too.
     cc_use.load('WORK')

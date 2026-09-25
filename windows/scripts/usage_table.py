@@ -19,7 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from cc_run import is_profile_name
+from cc_run import is_existing_profile_name
 
 PROFILES_DIR = Path(os.environ.get('CLAUDE_PROFILES') or Path.home() / '.claude-profiles').expanduser()
 MAX_PARALLEL = 6
@@ -57,7 +57,7 @@ def _discover() -> list[tuple[str, Path | None]]:
 
 def _is_profile(path: Path) -> bool:
     # cc's own rule, so the table probes exactly the folders cc and cc-use accept.
-    return path.is_dir() and is_profile_name(path.name)
+    return path.is_dir() and is_existing_profile_name(path.name)
 
 
 def _collect(profiles: list[tuple[str, Path | None]]) -> list[dict]:

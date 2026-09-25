@@ -24,7 +24,7 @@ import urllib.request
 from contextlib import contextmanager
 from pathlib import Path
 
-from cc_run import is_profile_name
+from cc_run import is_existing_profile_name
 
 PROFILES_DIR = Path(os.environ.get('CLAUDE_PROFILES') or Path.home() / '.claude-profiles').expanduser()
 LOADED_FILE = PROFILES_DIR / '.loaded'
@@ -208,7 +208,7 @@ def _owner_file(profile: str | None) -> Path:
 
 def _require_profile(name: str) -> str:
     """The profile's name as its folder spells it, since Windows opens work's folder for WORK too."""
-    if is_profile_name(name) and (PROFILES_DIR / name).is_dir():
+    if is_existing_profile_name(name) and (PROFILES_DIR / name).is_dir():
         for folder in PROFILES_DIR.iterdir():
             if folder.name.lower() == name.lower():
                 return folder.name

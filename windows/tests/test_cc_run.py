@@ -124,6 +124,20 @@ def test__run__refuses_the_loaded_profile_under_another_spelling(machine, record
         cc_run.run('work', [])
 
 
+@pytest.mark.parametrize('folder', ['alice@corp', 'jos\u00e9', 'work+2', "o'brien", '-x', 'old & copy'])
+def test__run__accepts_an_existing_folder_made_before_names_were_narrowed(machine, capfd, folder):
+    # Arrange: cc-add no longer makes these names, but a folder already there is still a profile.
+    (machine['profiles'] / folder).mkdir()
+
+    # Act
+    code = cc_run.run(folder, ['-p', 'hi'])
+
+    # Assert
+    assert code == 0
+    assert _seen(capfd)['config'] == str(machine['profiles'] / folder)
+    assert folder in cc_run.list_profiles()
+
+
 def test__share__links_under_a_path_cmd_would_split(machine, monkeypatch):
     # Arrange: & and % mean something to cmd.exe, even inside a folder name.
     profiles = machine['tmp'] / 'O&Brien%PATH%'
