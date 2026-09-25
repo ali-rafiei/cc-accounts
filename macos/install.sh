@@ -37,7 +37,7 @@ main() {
     "") install ;;
     --skills) install; link_skills ;;
     --uninstall) uninstall ;;
-    -h|--help) sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//' ;;
+    -h|--help) awk 'NR == 1 { next } !/^#/ { exit } { sub(/^# ?/, ""); print }' "$0" ;;  # the header comment
     *) echo "unknown option: $1 (see --help)" >&2; exit 2 ;;
   esac
 }
@@ -70,11 +70,17 @@ uninstall() {
     exit 1
   fi
   if [[ -f "$dest/.home-account.json" && "$(uname)" == Darwin ]]; then
-    # forget refuses whenever it can't prove the stash is a spare copy. Keeping it is the
-    # safe side, so uninstall carries on and says how to drop it later.
-    if ! python3 "$dest/cc_use.py" forget; then
-      echo "kept cc-use's stashed copy of your login (reason above). It is harmless; to delete it later:"
+    # forget exits 3 when it could not check the slot (offline): the stash is most likely a
+    # spare copy, so keep it and carry on. Any other refusal means the stash may be your only
+    # login, and uninstalling would take away the cc-use that puts it back, so stop here.
+    local rc=0
+    python3 "$dest/cc_use.py" forget || rc=$?
+    if (( rc == 3 )); then
+      echo "kept cc-use's stashed copy of your login (reason above). Once \`claude\` works as your own account, delete it:"
       echo "  security delete-generic-password -s 'Claude Code-credentials-cc-use-home'; rm '$dest/.home-account.json'"
+    elif (( rc != 0 )); then
+      echo "not uninstalling: cc-use's stash may hold the only copy of your login (reason above). Fix that, then rerun." >&2
+      exit 1
     fi
   fi
   local file skill

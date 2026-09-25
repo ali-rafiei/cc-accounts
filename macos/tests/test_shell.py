@@ -104,6 +104,21 @@ def test__cc__shares_skills_plugins_and_plugin_settings(home):
     assert settings == {'theme': 'light', 'enabledPlugins': {'tool@market': True}}
 
 
+@pytest.mark.parametrize('content', ['{"enabledPlugins": {},}', '[]'], ids=['trailing-comma', 'list'])
+def test__cc__names_an_unreadable_settings_file_instead_of_a_traceback(home, content):
+    # Arrange
+    (home / '.claude-profiles' / 'work').mkdir()
+    (home / '.claude' / 'settings.json').write_text(content)
+
+    # Act
+    out = _zsh('cc work', home)
+
+    # Assert
+    assert 'Traceback' not in out
+    assert 'settings.json' in out
+    assert f'CONFIG={home}/.claude-profiles/work ARGS=' in out.splitlines()  # claude still starts
+
+
 def test__cc__refuses_the_profile_cc_use_has_loaded(home):
     # Arrange
     (home / '.claude-profiles' / 'work').mkdir()
@@ -215,6 +230,42 @@ def test__cc__refuses_the_loaded_profile_named_with_a_trailing_slash(home):
 
     # Assert
     assert 'CONFIG=' not in out
+
+
+@pytest.mark.parametrize('typed', ['WORK', 'Work'])
+def test__cc__refuses_the_loaded_profile_named_in_another_case(home, typed):
+    # Arrange: macOS folders are case-insensitive, so `cc WORK` finds the loaded profile's folder.
+    (home / '.claude-profiles' / 'work').mkdir()
+    (home / '.claude-profiles' / '.loaded').write_text('work\n')
+
+    # Act
+    out = _zsh(f'cc {typed} -p hi', home, check=False)
+
+    # Assert
+    assert 'CONFIG=' not in out
+
+
+def test__cc__refuses_the_loaded_profile_typed_in_decomposed_unicode(home):
+    # Arrange: Claude Code hashes the NFC form, so a decomposed name reaches the loaded profile's own login.
+    composed, decomposed = 'caf\u00e9', 'cafe\u0301'
+    (home / '.claude-profiles' / composed).mkdir()
+    (home / '.claude-profiles' / '.loaded').write_text(composed + '\n')
+
+    # Act
+    out = _zsh(f'cc {decomposed} -p hi', home, check=False)
+
+    # Assert
+    assert 'CONFIG=' not in out
+
+
+@pytest.mark.parametrize('name', ['status', 'forget', '-h', '--help'])
+def test__cc_add__refuses_a_name_cc_use_reads_as_a_command(home, name):
+    # Act: `cc-use status` shows the slot, so a profile by that name could never be loaded.
+    out = _zsh(f'cc-add {name}', home, check=False)
+
+    # Assert
+    assert 'CONFIG=' not in out
+    assert not (home / '.claude-profiles' / name).exists()
 
 
 def test__cc__returns_claudes_exit_status(home):
@@ -373,12 +424,12 @@ def test__install__adds_the_line_when_zshrc_only_has_it_commented_out(tmp_path):
     assert '# claude-multi-account' in (tmp_path / '.zshrc').read_text()
 
 
-def test__uninstall__keeps_going_when_forget_refuses(home):
-    # Arrange: cc-use has a stash, and forget refuses (a stub stands in for cc_use.py so the
-    # real Keychain is never touched).
+def test__uninstall__keeps_going_when_forget_cannot_confirm(home):
+    # Arrange: cc-use has a stash, and forget cannot confirm whose login is in the slot (a stub
+    # stands in for cc_use.py so the real Keychain is never touched).
     dest = home / '.claude-profiles'
     (dest / '.home-account.json').write_text('{}')
-    (dest / 'cc_use.py').write_text('import sys\nprint("cc-use: not deleting it", file=sys.stderr)\nsys.exit(1)\n')
+    (dest / 'cc_use.py').write_text('import sys\nprint("cc-use: could not confirm", file=sys.stderr)\nsys.exit(3)\n')
 
     # Act
     done = _run(['bash', str(REPO / 'install.sh'), '--uninstall'], home, check=False)
@@ -388,6 +439,73 @@ def test__uninstall__keeps_going_when_forget_refuses(home):
     assert not (dest / 'profiles.zsh').exists()
     assert '# claude-multi-account' not in (home / '.zshrc').read_text()
     assert 'security delete-generic-password' in done.stdout
+
+
+def test__uninstall__stops_when_the_stash_holds_your_only_login(home):
+    # Arrange: forget refuses because another account is in the slot (stub cc_use.py, no real Keychain).
+    dest = home / '.claude-profiles'
+    (dest / '.home-account.json').write_text('{}')
+    (dest / 'cc_use.py').write_text('import sys\nprint("cc-use: slot holds work", file=sys.stderr)\nsys.exit(1)\n')
+
+    # Act
+    done = _run(['bash', str(REPO / 'install.sh'), '--uninstall'], home, check=False)
+
+    # Assert: nothing is removed, and the stash is not called harmless.
+    assert done.returncode != 0
+    assert (dest / 'profiles.zsh').exists()
+    assert '# claude-multi-account' in (home / '.zshrc').read_text()
+    assert 'delete-generic-password' not in done.stdout
+
+
+def test__ccusage_all__raw_skips_the_loaded_profiles_own_copy(home):
+    # Arrange: work's login is in the default slot, so its own copy may be stale.
+    (home / '.claude-profiles' / 'work').mkdir()
+    (home / '.claude-profiles' / 'personal').mkdir()
+    (home / '.claude-profiles' / '.loaded').write_text('work\n')
+
+    # Act
+    out = _zsh('ccusage-all --raw', home)
+
+    # Assert
+    assert f'CONFIG={home}/.claude-profiles/work ' not in out
+    assert f'CONFIG={home}/.claude-profiles/personal ARGS=-p /usage' in out
+
+
+def test__cc_login__puts_the_throwaway_browser_shim_first_on_path(home):
+    # Arrange
+    (home / '.claude-profiles' / 'work').mkdir()
+
+    # Act
+    out = _zsh('claude() { print -r -- "OPEN=$(whence -p open) ARGS=$*"; }; cc-login work', home)
+
+    # Assert
+    assert out == f'OPEN={home}/.claude-profiles/bin/open ARGS=auth login'
+
+
+@pytest.mark.skipif(os.uname().sysname != 'Darwin', reason='uninstall only runs forget on macOS')
+def test__uninstall__deletes_the_stash_through_forget(home):
+    # Arrange: a stub stands in for cc_use.py, so the real Keychain is never touched.
+    dest = home / '.claude-profiles'
+    (dest / '.home-account.json').write_text('{}')
+    (dest / 'cc_use.py').write_text('import sys\nopen(sys.argv[0] + ".args", "w").write(" ".join(sys.argv[1:]))\n')
+
+    # Act
+    done = _run(['bash', str(REPO / 'install.sh'), '--uninstall'], home)
+
+    # Assert
+    assert (dest / 'cc_use.py.args').read_text() == 'forget'
+    assert 'kept' not in done.stdout
+
+
+def test__install__help_prints_only_the_header_comment(tmp_path):
+    # Act
+    out = _run(['bash', str(REPO / 'install.sh'), '--help'], tmp_path).stdout
+
+    # Assert
+    lines = out.splitlines()
+    assert lines[0] == 'Install the shell side of claude-multi-account.'
+    assert 'set -euo pipefail' not in out
+    assert lines[-1].startswith('A file already installed')
 
 
 def _zsh(command: str, home: Path, check: bool = True, extra_env: dict[str, str] | None = None) -> str:

@@ -67,6 +67,18 @@ def test__discover__probes_the_loaded_profile_through_the_default_login(profiles
     assert config_dirs['personal'] == profiles / 'personal'
 
 
+def test__discover__probes_a_loaded_name_with_edge_spaces_through_the_default_login(profiles):
+    # Arrange: cc-use records the folder name exactly, spaces and all.
+    (profiles / 'work ').mkdir()
+    (profiles / '.loaded').write_text('work \n')
+
+    # Act
+    config_dirs = dict(usage_table._discover())
+
+    # Assert
+    assert config_dirs['work '] is None
+
+
 def test__parse_reset__resolves_a_date_to_the_coming_weekday():
     # Arrange
     target = (datetime.now() + timedelta(days=30)).replace(hour=15, minute=0, second=0, microsecond=0)
@@ -124,6 +136,17 @@ def test__probe__keeps_a_week_reset_with_no_timezone_to_its_own_line(profiles, m
 def test__logged_in__reads_the_json_after_a_warning_line():
     # Arrange
     status = 'Warning: a newer version is available\n{"loggedIn": true, "authMethod": "claude.ai"}\n'
+
+    # Act
+    logged_in = usage_table._logged_in(status)
+
+    # Assert
+    assert logged_in is True
+
+
+def test__logged_in__reads_the_json_after_a_warning_line_holding_a_brace():
+    # Arrange
+    status = 'Warning: ignoring {bad} in settings\n{"loggedIn": true}\n'
 
     # Act
     logged_in = usage_table._logged_in(status)

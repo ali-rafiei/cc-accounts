@@ -16,6 +16,7 @@ import json
 import os
 import random
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -60,11 +61,28 @@ PROFILE_URL = 'https://api.anthropic.com/api/oauth/profile'
 USAGE = """usage: cc-use                 show which account is in the default slot
        cc-use <profile>       load that profile's login into the default slot
        cc-use default         put your own login back
-       cc-use forget          delete cc-use's stashed copy of your login (used by uninstall)"""
+       cc-use forget          delete cc-use's stashed copy of your login (used by uninstall)
+exit status 3: it could not confirm whose login is in the default slot (offline, say)"""
 
 
 class SwapError(Exception):
     """A swap refused or failed before it could leave the slot half-changed."""
+
+    exit_code = 1
+
+
+class UnconfirmedError(SwapError):
+    """The slot's owner could not be checked (offline, or an expired token), as opposed to checked and wrong."""
+
+    exit_code = 3
+
+
+class _Terminated(BaseException):
+    """SIGTERM or SIGHUP arrived mid-swap; raised so the rollback and the lock cleanup still run."""
+
+    def __init__(self, signum: int):
+        super().__init__(signum)
+        self.signum = signum
 
 
 class _RefuseRedirect(urllib.request.HTTPRedirectHandler):
@@ -93,7 +111,10 @@ def main(argv: list[str]) -> int:
             print(load(None if argv[0] == 'default' else argv[0]))
     except SwapError as exc:
         print(f'cc-use: {exc}', file=sys.stderr)
-        return 1
+        return exc.exit_code
+    except _Terminated as exc:
+        print('cc-use: interrupted; the swap was undone', file=sys.stderr)
+        return 128 + exc.signum
     return 0
 
 
@@ -104,6 +125,9 @@ def status() -> str:
 
 def load(target: str | None) -> str:
     owner = loaded_profile()
+    stash = _keychain_get(HOME_STASH_SERVICE) if target is None and owner is None else None
+    if stash is not None and (slot := _keychain_get(DEFAULT_SERVICE)) is not None:
+        owner = _interrupted_swap_owner(slot, stash)
     if target == owner:
         return f'{_label(target)} is already in the default slot'
     if target is not None:
@@ -111,9 +135,11 @@ def load(target: str | None) -> str:
     current = _keychain_get(DEFAULT_SERVICE)
     if current is None:
         raise SwapError('the default slot holds no login; run `claude auth login` first')
-    _verify_owner(current, owner)
+    # A deleted profile leaves no account to check against; its login is kept in its own item below.
+    if not (target is None and owner is not None and not (PROFILES_DIR / owner).is_dir()):
+        _verify_owner(current, owner)
 
-    with _credentials_lock(), _config_lock():
+    with _signals_raise(), _credentials_lock(), _config_lock():
         if _keychain_get(DEFAULT_SERVICE) != current:
             raise SwapError('a session refreshed the default login mid-swap; retry')
         # Checked under the lock, so a `cc <profile>` started, or a refresh made, since cc-use began is seen.
@@ -142,21 +168,29 @@ def load(target: str | None) -> str:
             config_written = True
             _write_loaded(target)
         except BaseException:
-            _keychain_set(DEFAULT_SERVICE, current)
+            _undo(_keychain_set, DEFAULT_SERVICE, current)
             if config_written:
-                _write_json(GLOBAL_CONFIG, config)
-                _write_loaded(owner)
+                _undo(_write_json, GLOBAL_CONFIG, config)
+                _undo(_write_loaded, owner)
             raise
+        # Your login is back in the slot, so the stash is a stale copy from here on.
+        note = ''
+        if target is None:
+            try:
+                _keychain_delete(HOME_STASH_SERVICE)
+                HOME_ACCOUNT_FILE.unlink(missing_ok=True)
+            except (SwapError, OSError) as exc:
+                note = f' The stale stash was not deleted ({exc}); `cc-use forget` deletes it.'
 
     return (
         f'default slot: {_label(owner)} -> {_label(target)} '
         f'({incoming_account.get("emailAddress")}). Running sessions and VS Code pick it up '
-        'within ~30s; reopen the Claude tab to switch at once.'
+        f'within ~30s; reopen the Claude tab to switch at once.{note}'
     )
 
 
 def forget() -> str:
-    """Delete the stash left by a round trip; it is a stale copy once your own login is back."""
+    """Delete a leftover stash (a killed swap's, or one an older cc-use kept after a round trip)."""
     loaded = loaded_profile()
     if loaded is not None:
         raise SwapError(f'{loaded} is loaded, so the stash holds your only login; run `cc-use default` first')
@@ -171,9 +205,50 @@ def forget() -> str:
     return 'deleted the stashed copy of your login; your default login is untouched'
 
 
+def _interrupted_swap_owner(slot: str, stash: str) -> str | None:
+    """The profile a swap killed before writing .loaded left in the slot; None when the slot holds your own login."""
+    identity = _fetch_identity(_oauth(slot).get('accessToken'))
+    if identity is None:
+        if _oauth(stash).get('refreshToken') == _oauth(slot).get('refreshToken'):
+            return None
+        raise UnconfirmedError(
+            'could not confirm whose login is in the default slot (offline, or its access token '
+            'expired), and cc-use keeps a stashed login; retry online'
+        )
+    if identity['uuid'] == _home_account(stash).get('accountUuid'):
+        return None
+    holders = _profiles_holding(identity['uuid'])
+    if len(holders) != 1:
+        _verify_owner(slot, None, doing='restoring the stash')  # refuses, naming the way out
+    return holders[0]
+
+
+def _profiles_holding(account_uuid: str) -> list[str]:
+    """The profiles whose recorded account is this one."""
+    names = []
+    for path in sorted(PROFILES_DIR.iterdir()) if PROFILES_DIR.is_dir() else []:
+        if not path.is_dir() or path.name in RESERVED_NAMES or path.name[:1] in ('.', '_'):
+            continue
+        try:
+            account = _read_json(path / '.claude.json').get('oauthAccount')
+        except SwapError:
+            continue
+        if isinstance(account, dict) and account.get('accountUuid') == account_uuid:
+            names.append(path.name)
+    return names
+
+
+def _undo(step, *args) -> None:
+    """One rollback step; a failure is reported and the next step still runs."""
+    try:
+        step(*args)
+    except Exception as exc:  # the caller re-raises the error that started the rollback
+        print(f'cc-use: could not undo {step.__name__}({args[0]!r}): {exc}', file=sys.stderr)
+
+
 def loaded_profile() -> str | None:
     try:
-        return LOADED_FILE.read_text().strip() or None
+        return LOADED_FILE.read_text().rstrip('\n') or None  # only the newline: cc compares the name exactly
     except FileNotFoundError:
         return None
 
@@ -194,7 +269,9 @@ def _owner_service(profile: str | None) -> str:
 def _require_profile(name: str) -> None:
     # A name with a slash ("work/") finds the same dir, but .loaded would then not match the name `cc` compares.
     malformed = not name or '/' in name or name[:1] in ('.', '_')
-    if malformed or name in RESERVED_NAMES or not (PROFILES_DIR / name).is_dir():
+    # The folder lookup ignores case and Unicode form; the Keychain item and .loaded do not.
+    exact = (PROFILES_DIR / name).is_dir() and name in os.listdir(PROFILES_DIR)
+    if malformed or name in RESERVED_NAMES or not exact:
         raise SwapError(f'no such profile: {name}')
 
 
@@ -236,16 +313,23 @@ def _verify_owner(current: str, owner: str | None, doing: str = 'swapping') -> N
                 f'{_label(owner)} ({expected.get("emailAddress")}); not {doing}'
             )
             if owner is None and stored is not None:
-                message += (
-                    '. If you signed the default login in as a different account on purpose, drop the old '
-                    f"stash and retry: security delete-generic-password -s '{HOME_STASH_SERVICE}'; "
-                    f"rm '{HOME_ACCOUNT_FILE}'"
-                )
+                holders = _profiles_holding(identity['uuid'])
+                if len(holders) == 1:
+                    # A swap to it was killed before .loaded; the stash is your login's only copy.
+                    message += f'. A swap to {holders[0]} was cut short: run `cc-use default` to finish it'
+                elif holders:
+                    message += f'. Profiles {", ".join(holders)} all record that account; fix their logins first'
+                else:
+                    message += (
+                        '. If you signed the default login in as a different account on purpose, drop the old '
+                        f"stash and retry: security delete-generic-password -s '{HOME_STASH_SERVICE}'; "
+                        f"rm '{HOME_ACCOUNT_FILE}'"
+                    )
             raise SwapError(message)
         return
     if stored is None or _oauth(stored).get('refreshToken') == _oauth(current).get('refreshToken'):
         return
-    raise SwapError(
+    raise UnconfirmedError(
         'could not confirm whose login is in the default slot (offline, or its '
         'access token expired); send one message in any default session, then retry'
     )
@@ -373,6 +457,21 @@ def _security(args: list[str], stdin: str | None = None) -> subprocess.Completed
         raise SwapError(f'Keychain did not answer within {KEYCHAIN_TIMEOUT_S}s (locked?)') from exc
     except OSError as exc:
         raise SwapError(f'could not run {SECURITY}: {exc}') from exc
+
+
+@contextmanager
+def _signals_raise():
+    """Turn SIGTERM and SIGHUP into _Terminated, so a killed swap still rolls back and frees its locks."""
+
+    def handler(signum, frame):
+        raise _Terminated(signum)
+
+    previous = {sig: signal.signal(sig, handler) for sig in (signal.SIGTERM, signal.SIGHUP)}
+    try:
+        yield
+    finally:
+        for sig, old in previous.items():
+            signal.signal(sig, old)
 
 
 @contextmanager

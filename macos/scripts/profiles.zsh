@@ -50,8 +50,9 @@ cc() {
 cc-add() {
   emulate -L zsh
   local base="$(_cc_base)"
-  if [[ -z "$1" || "$1" == default || "$1" == bin || "$1" == [._]* || "$1" == */* ]]; then
-    print "usage: cc-add <profile>  (not 'default' or 'bin', no /, and not starting with . or _)"
+  # status, forget and -h/--help are cc-use's own commands, so it could never load such a profile.
+  if [[ -z "$1" || "$1" == (default|bin|status|forget) || "$1" == [-._]* || "$1" == */* ]]; then
+    print "usage: cc-add <profile>  (not 'default', 'bin', 'status' or 'forget', no /, and not starting with -, . or _)"
     return 1
   fi
   mkdir -p "$base/$1" && cc-login "$1"
@@ -113,7 +114,9 @@ _cc_profiles() {
 _cc_is_profile() {
   emulate -L zsh
   # No /: `work/` names the same directory as `work` but would slip past the .loaded check.
-  [[ -n "$1" && "$1" != bin && "$1" != default && "$1" != [._]* && "$1" != */* && -d "$(_cc_base)/$1" ]]
+  # So would `WORK` or a decomposed `café`, which -d finds on macOS: the name must be the folder's own.
+  local -a names=("$(_cc_base)"/*(/N:t))
+  [[ -n "$1" && "$1" != bin && "$1" != default && "$1" != [._]* && "$1" != */* ]] && (( ${names[(Ie)$1]} ))
 }
 
 _cc_loaded() {
@@ -135,10 +138,18 @@ _cc_share() {
 import json, sys
 from pathlib import Path
 KEYS = ('enabledPlugins', 'extraKnownMarketplaces')
+def read(path):
+    data = json.loads(path.read_text()) if path.exists() else {}
+    if not isinstance(data, dict):
+        raise ValueError('not a JSON object')
+    return data
 source_path = Path.home() / '.claude' / 'settings.json'
-source = json.loads(source_path.read_text()) if source_path.exists() else {}
 target_path = Path(sys.argv[1]) / 'settings.json'
-target = json.loads(target_path.read_text()) if target_path.exists() else {}
+try:
+    source, target = read(source_path), read(target_path)
+except (OSError, ValueError) as exc:
+    # Launch anyway: the profile keeps the plugin settings it had.
+    sys.exit(f'cc: plugin settings not shared, could not read a settings.json ({exc}): {source_path}, {target_path}')
 merged = {**target, **{k: source[k] for k in KEYS if k in source}}
 if merged != target:
     target_path.write_text(json.dumps(merged, indent=2) + '\n')
