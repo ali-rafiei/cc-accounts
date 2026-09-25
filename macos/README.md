@@ -116,7 +116,8 @@ the `Claude Code-credentials` item in the macOS Keychain, plus the account detai
 `~/.claude.json`. `cc-use work` swaps in work's login and account details. New sessions
 start on it straight away, and running ones pick it up once Claude Code's Keychain cache
 expires, which is about 30 seconds. In VS Code, reopening the Claude tab switches at once.
-Your own login waits in a separate Keychain item until `cc-use default` puts it back.
+Your own login waits in a separate Keychain item until `cc-use default` puts it back and
+deletes that spare copy.
 
 Only one live copy of a login exists at a time. Claude Code refreshes tokens as it goes,
 and a refresh can leave an older copy dead, so `cc-use` moves a login around instead of
@@ -132,9 +133,13 @@ back to its owner. A few checks guard the swap:
   own live copy of the login.
 - While a profile is loaded, `cc <that profile>` refuses to start, and `ccusage-all` reads
   that account's usage through the default login rather than its now-stale copy.
+- If a swap is cut off part way (a closed terminal, say), `cc-use default` works out which
+  profile's login is in the slot and finishes putting yours back.
 
 ## Things to know
 
+- A profile name can't be `default`, `bin`, `status` or `forget`, contain `/`, or start with
+  `-`, `.` or `_`, and you type it in the folder's own case (`cc work`, not `cc WORK`).
 - `cc` shares its name with the C compiler (`/usr/bin/cc`). The function only takes over in
   your interactive zsh; `make` and build scripts run the compiler as before. Type
   `command cc` when you want the compiler by hand.
@@ -159,10 +164,12 @@ cc-use default            # if a profile is loaded; uninstall refuses otherwise
 ./install.sh --uninstall  # from the clone's macos folder
 ```
 
-That removes the scripts, the `~/.zshrc` line and any skill links from `--skills`. It also
-deletes the spare copy of your login that `cc-use` kept in the Keychain, once it can confirm
-your own login is back in the default slot; if it can't (offline, say), it keeps the copy,
-which is harmless, and prints the command to delete it later. With a custom
+That removes the scripts, the `~/.zshrc` line and any skill links from `--skills`. If
+`cc-use` still holds a copy of your login (normally it doesn't, since `cc-use default` deletes
+it), uninstall deletes it once it can confirm your own login is back in the default slot. If
+another account is in the slot, uninstall stops before removing anything, because that copy
+may be your only login: run `cc-use default` first. If it just can't check (offline), it
+keeps the copy and prints the command to delete it later. With a custom
 `CLAUDE_PROFILES`, run the uninstall from a terminal that has it set (any new terminal does,
 until the uninstall removes the line). If you installed the skills as a plugin, remove it
 too, from any shell (or as `/plugin uninstall ...` and `/plugin marketplace remove ...`
