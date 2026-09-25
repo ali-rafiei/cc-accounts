@@ -168,14 +168,17 @@ def _account_email(config_dir: Path | None) -> str | None:
 
 def _logged_in(status: str) -> bool:
     """Read `claude auth status` output, which may carry warning lines before its JSON."""
+    decoder = json.JSONDecoder()
     start = status.find('{')
-    if start < 0:
-        return False
-    try:
-        parsed, _ = json.JSONDecoder().raw_decode(status, start)
-    except json.JSONDecodeError:
-        return False
-    return parsed.get('loggedIn') is True
+    while start >= 0:  # a warning line can hold a brace of its own
+        try:
+            parsed, _ = decoder.raw_decode(status, start)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict):
+            return parsed.get('loggedIn') is True
+        start = status.find('{', start + 1)
+    return False
 
 
 def _error_line(out: str) -> str:

@@ -144,6 +144,17 @@ def test__logged_in__reads_the_json_after_a_warning_line():
     assert logged_in is True
 
 
+def test__logged_in__reads_the_json_after_a_warning_line_holding_a_brace():
+    # Arrange
+    status = 'Warning: ignoring {bad} in settings\n{"loggedIn": true}\n'
+
+    # Act
+    logged_in = usage_table._logged_in(status)
+
+    # Assert
+    assert logged_in is True
+
+
 def test__probe__shows_why_claude_could_not_run_instead_of_not_logged_in(profiles, monkeypatch):
     # Arrange
     _fake_claude(monkeypatch, 'error: claude is not on PATH')
