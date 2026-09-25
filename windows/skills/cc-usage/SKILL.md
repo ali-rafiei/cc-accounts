@@ -35,7 +35,9 @@ No column explanations, no summary of the numbers, no restating rows in prose.
 - **The user asked which account to use**: name one account in one line. Pick the lowest
   `WEEK`, ignoring accounts whose reset is imminent, and check `OTHER LIMITS` too: a
   per-model cap at 100% makes that model unusable even when `WEEK` is low.
-- **The script fails or a row shows `no limit data`**: say what broke, briefly.
+- **The script fails, or a row shows `no limit data` or an `error: ...` message** (claude
+  missing, a probe timing out): say what broke, briefly. An `error:` row is not a login
+  problem, so don't suggest `cc-login` for it.
 - **A row carries `*` or `[default]`**: no comment needed.
 
 ## Adding an account

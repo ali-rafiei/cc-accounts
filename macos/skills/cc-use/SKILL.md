@@ -15,9 +15,11 @@ The argument is a profile directory name under `~/.claude-profiles/`, or `defaul
 argument means status. If the script is missing, the shell side is not installed: point
 the user at `install.sh` in this plugin's repository.
 
-**"Whichever has headroom" / "the best one":** run the `cc-usage` table first, then load the
+**"Whichever has headroom" / "the best one":** run the `cc-usage` table first and pick the
 account with the lowest `WEEK`, skipping any whose reset is imminent or whose `OTHER LIMITS`
-shows a model at 100% that the user needs.
+shows a model at 100% that the user needs. Then name that account and ask before loading it:
+the swap moves every default session, including VS Code windows on other projects, so the
+user must see which account (personal or work) they are about to land on.
 
 ## What to tell the user
 
