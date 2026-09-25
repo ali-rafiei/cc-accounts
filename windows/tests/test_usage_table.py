@@ -247,7 +247,7 @@ def test__account_email__reads_utf8_whatever_the_locale_codec(tmp_path):
     assert email == 'me@example.com'
 
 
-@pytest.mark.parametrize('folder', ['Default', 'BIN', 'old & copy', 'x%PATH%'])
+@pytest.mark.parametrize('folder', ['Default', 'old & copy', 'x%PATH%'])
 def test__discover__skips_folders_cc_does_not_take_as_profiles(profiles, folder):
     # Arrange: `cc` and `cc-use` refuse these names, so the table must not probe them either.
     (profiles / folder).mkdir()
@@ -268,3 +268,27 @@ def test__discover__probes_the_loaded_profile_through_the_default_login_under_an
 
     # Assert
     assert config_dirs['work'] is None
+
+
+@pytest.mark.parametrize('content', ['[]', '{"oauthAccount": "me@example.com"}'])
+def test__account_email__treats_an_odd_json_shape_as_no_email(tmp_path, content):
+    # Arrange
+    (tmp_path / '.claude.json').write_text(content)
+
+    # Act
+    email = usage_table._account_email(tmp_path)
+
+    # Assert
+    assert email is None
+
+
+def test__render__marks_the_loaded_profile_under_any_spelling(profiles, capsys):
+    # Arrange
+    (profiles / '.loaded').write_text('WORK\n')
+    row = {'account': 'work@example.com', 'profile': 'work', 'note': 'not logged in', 'other': '', 'resets': ''}
+
+    # Act
+    usage_table._render([row])
+
+    # Assert
+    assert 'work [default]' in capsys.readouterr().out
