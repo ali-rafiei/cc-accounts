@@ -154,9 +154,11 @@ cc-use default              # if a profile is loaded; uninstall refuses otherwis
 .\install.ps1 -Uninstall    # from the clone's windows folder
 ```
 
-That removes the scripts, the lines in your PowerShell profiles and `~\.bashrc`, any skill
-links from `-Skills`, and the copy of your login that `cc-use` kept. If you installed the
-skills as a plugin, remove it from inside Claude Code too:
+That removes the scripts, the lines in your PowerShell profiles and `~\.bashrc`, and any
+skill links from `-Skills`. It also deletes the spare copy of your login that `cc-use` kept,
+once it can confirm your own login is back in the default slot; if it can't (offline, say),
+it keeps the copy, which is harmless, and prints the command to delete it later. If you
+installed the skills as a plugin, remove it from inside Claude Code too:
 
 ```text
 /plugin uninstall claude-multi-account-windows@claude-multi-account
