@@ -100,7 +100,7 @@ def test__load__switching_between_profiles_leaves_the_stashed_login_alone(machin
     assert machine['stash'].read_text() == HOME_SECRET
 
 
-@pytest.mark.parametrize('name', ['bin', 'default', '.hidden', '_scratch', 'missing'])
+@pytest.mark.parametrize('name', ['bin', 'default', '.hidden', '_scratch', 'missing', '', 'work/', 'work\\', 'work/.'])
 def test__load__rejects_names_that_are_not_profiles(machine, name):
     # Arrange
     for folder in ('bin', '_scratch', '.hidden'):
@@ -109,6 +109,15 @@ def test__load__rejects_names_that_are_not_profiles(machine, name):
     # Act / Assert
     with pytest.raises(cc_use.SwapError, match='no such profile'):
         cc_use.load(name)
+
+
+def test__load__records_the_profile_under_its_own_spelling(machine):
+    # Act: Windows opens work's folder for WORK too.
+    cc_use.load('WORK')
+
+    # Assert
+    assert cc_use.loaded_profile() == 'work'
+    assert 'already' in cc_use.load('work')
 
 
 def test__load__names_the_fix_for_a_profile_that_never_logged_in(machine):
@@ -154,6 +163,50 @@ def test__load__refuses_when_the_slot_holds_an_unexpected_account(machine):
     with pytest.raises(cc_use.SwapError, match='cc-use recorded work'):
         cc_use.load(None)
     assert (machine['profiles'] / 'work' / '.credentials.json').read_text() == WORK_SECRET
+
+
+def test__load__reads_a_global_config_saved_with_a_bom(machine):
+    # Arrange: Notepad and Windows PowerShell 5.1's `Set-Content -Encoding UTF8` write a BOM.
+    machine['global_config'].write_text(json.dumps({'oauthAccount': HOME_ACCOUNT}), encoding='utf-8-sig')
+
+    # Act
+    cc_use.load('work')
+
+    # Assert
+    assert json.loads(machine['global_config'].read_text(encoding='utf-8'))['oauthAccount'] == WORK_ACCOUNT
+
+
+def test__verify_owner__reads_credentials_saved_with_a_bom(machine):
+    # Arrange: the slot's login is work's own, but its file starts with a BOM.
+    current = '\ufeff' + WORK_SECRET
+
+    # Act / Assert: no exception, the identity check sees work's access token
+    cc_use._verify_owner(current, 'work')
+
+
+def test__load__a_failed_config_write_leaves_the_slot_as_it_was(machine, monkeypatch):
+    # Arrange: another program holds ~/.claude.json open until the rename retries give up, once.
+    original_config = machine['global_config'].read_text()
+    real_replace, failures = cc_use._replace, []
+
+    def config_stays_locked(source, destination):
+        if destination == machine['global_config'] and not failures:
+            failures.append(destination)
+            raise cc_use.SwapError(f'{destination} stayed locked by another program; retry')
+        real_replace(source, destination)
+
+    monkeypatch.setattr(cc_use, '_replace', config_stays_locked)
+
+    # Act
+    with pytest.raises(cc_use.SwapError, match='stayed locked'):
+        cc_use.load('work')
+
+    # Assert: the slot still holds the user's login, so a plain retry goes through.
+    assert machine['default'].read_text() == HOME_SECRET
+    assert machine['global_config'].read_text() == original_config
+    assert cc_use.loaded_profile() is None
+    cc_use.load('work')
+    assert machine['default'].read_text() == WORK_SECRET
 
 
 def test__load__already_loaded_is_a_no_op(machine):
@@ -253,6 +306,21 @@ def test__lock_dir__takes_over_a_stale_lock(tmp_path):
     # Assert
     assert held
     assert not lock.exists()
+
+
+def test__lock_dir__gives_up_on_a_stale_lock_it_cannot_remove(tmp_path, monkeypatch):
+    # Arrange: a stale lock that is not an empty directory, so rmdir keeps failing.
+    monkeypatch.setattr(cc_use, 'LOCK_TIMEOUT_S', 0.3)
+    lock = tmp_path / 'x.lock'
+    lock.mkdir()
+    (lock / 'stray').write_text('')
+    old = time.time() - 120
+    os.utime(lock, (old, old))
+
+    # Act / Assert
+    with pytest.raises(cc_use.SwapError, match='stayed held'):
+        with cc_use._lock_dir(lock, stale_s=60):
+            pass
 
 
 def test__lock_dir__gives_up_on_a_live_lock(tmp_path, monkeypatch):

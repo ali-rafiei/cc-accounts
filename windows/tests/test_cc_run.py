@@ -80,6 +80,21 @@ def test__run__feeds_a_prompt_file_on_stdin(machine, capfd):
     assert seen['args'] == ['-p']
 
 
+def test__main__takes_its_arguments_as_json_from_the_environment(machine, capfd, monkeypatch):
+    # Arrange: how profiles.ps1 passes them, since Windows PowerShell 5.1 splits an argument
+    # with embedded quotes and drops an empty one.
+    (machine['profiles'] / 'work').mkdir()
+    monkeypatch.setenv(cc_run.ARGV_ENV, json.dumps(['run', 'work', '-p', 'say "hi there"', '']))
+
+    # Act
+    code = cc_run.main(['--argv-from-env'])
+
+    # Assert: claude gets them intact, and not the variable itself.
+    assert code == 0
+    assert _seen(capfd)['args'] == ['-p', 'say "hi there"', '']
+    assert cc_run.ARGV_ENV not in os.environ
+
+
 def test__run__refuses_the_profile_cc_use_has_loaded(machine, capfd):
     # Arrange
     (machine['profiles'] / 'work').mkdir()
@@ -89,6 +104,38 @@ def test__run__refuses_the_profile_cc_use_has_loaded(machine, capfd):
     with pytest.raises(cc_run.ProfileError, match='loaded into the default login'):
         cc_run.run('work', [])
     assert capfd.readouterr().out == ''
+
+
+@pytest.mark.parametrize(
+    'recorded',
+    [
+        'work/',
+        pytest.param('work\\', marks=pytest.mark.skipif(sys.platform != 'win32', reason='a separator on Windows')),
+        'WORK',
+    ],
+)
+def test__run__refuses_the_loaded_profile_under_another_spelling(machine, recorded):
+    # Arrange: every spelling here opens the same folder on Windows.
+    (machine['profiles'] / 'work').mkdir()
+    (machine['profiles'] / '.loaded').write_text(recorded + '\n')
+
+    # Act / Assert
+    with pytest.raises(cc_run.ProfileError, match='loaded into the default login'):
+        cc_run.run('work', [])
+
+
+def test__share__links_under_a_path_cmd_would_split(machine, monkeypatch):
+    # Arrange: & and % mean something to cmd.exe, even inside a folder name.
+    profiles = machine['tmp'] / 'O&Brien%PATH%'
+    profile = profiles / 'work'
+    profile.mkdir(parents=True)
+    monkeypatch.setattr(cc_run, 'PROFILES_DIR', profiles)
+
+    # Act
+    cc_run.share(profile)
+
+    # Assert
+    assert os.path.samefile(profile / 'skills', machine['claude_home'] / 'skills')
 
 
 @pytest.mark.parametrize('name', ['bin', '_scratch', '.hidden', 'missing'])
@@ -116,6 +163,22 @@ def test__run__shares_skills_plugins_and_plugin_settings(machine, capfd):
     assert os.path.samefile(profile / 'plugins', machine['claude_home'] / 'plugins')
     settings = json.loads((profile / 'settings.json').read_text())
     assert settings == {'theme': 'light', 'enabledPlugins': {'tool@market': True}}
+
+
+def test__run__reads_plugin_settings_saved_with_a_bom(machine, capfd):
+    # Arrange: Notepad and Windows PowerShell 5.1's `Set-Content -Encoding UTF8` write a BOM.
+    (machine['profiles'] / 'work').mkdir()
+    (machine['claude_home'] / 'settings.json').write_text(
+        json.dumps({'enabledPlugins': {'tool@market': True}}), encoding='utf-8-sig'
+    )
+
+    # Act
+    code = cc_run.run('work', [])
+
+    # Assert
+    assert code == 0
+    settings = json.loads((machine['profiles'] / 'work' / 'settings.json').read_text(encoding='utf-8'))
+    assert settings == {'enabledPlugins': {'tool@market': True}}
 
 
 def test__share__leaves_a_real_directory_alone(machine):
@@ -163,7 +226,7 @@ def test__add__creates_the_profile_and_starts_a_login(machine, capfd):
     assert _seen(capfd)['args'] == ['auth', 'login']
 
 
-@pytest.mark.parametrize('name', ['default', 'bin', '_x', '.x', 'a/b'])
+@pytest.mark.parametrize('name', ['default', 'bin', '_x', '.x', 'a/b', 'x&calc', 'a%PATH%', 'work.', 'work '])
 def test__add__rejects_unusable_names(machine, name):
     # Act / Assert
     with pytest.raises(cc_run.ProfileError, match='not a usable profile name'):
