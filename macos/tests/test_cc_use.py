@@ -298,3 +298,41 @@ def test__keychain_account__uses_a_plain_user_name_as_is(monkeypatch):
 
     # Act / Assert
     assert cc_use._keychain_account() == 'jane.doe_2-x'
+
+
+def test__load__failed_config_write_puts_the_slot_back(machine, monkeypatch):
+    # Arrange: writing ~/.claude.json fails after the slot already holds the incoming login.
+    real_write_json = cc_use._write_json
+
+    def write_json(path, data):
+        if path == machine['global_config']:
+            raise OSError(28, 'No space left on device')
+        real_write_json(path, data)
+
+    monkeypatch.setattr(cc_use, '_write_json', write_json)
+
+    # Act
+    with pytest.raises(OSError, match='No space left'):
+        cc_use.load('work')
+
+    # Assert: the slot, the config and .loaded all still agree on the user's own login.
+    assert machine['keychain'][cc_use.DEFAULT_SERVICE] == HOME_SECRET
+    assert json.loads(machine['global_config'].read_text())['oauthAccount'] == HOME_ACCOUNT
+    assert cc_use.loaded_profile() is None
+
+
+def test__load__failed_loaded_write_puts_the_slot_and_config_back(machine, monkeypatch):
+    # Arrange: recording .loaded is the last write, so the slot and the config already changed.
+    def write_loaded(profile):
+        if profile is not None:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(cc_use, '_write_loaded', write_loaded)
+
+    # Act
+    with pytest.raises(KeyboardInterrupt):
+        cc_use.load('work')
+
+    # Assert
+    assert machine['keychain'][cc_use.DEFAULT_SERVICE] == HOME_SECRET
+    assert json.loads(machine['global_config'].read_text())['oauthAccount'] == HOME_ACCOUNT

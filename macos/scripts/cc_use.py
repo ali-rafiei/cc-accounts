@@ -118,10 +118,20 @@ def load(target: str | None) -> str:
         _keychain_set(_owner_service(owner), current)
         if owner is None:
             _write_json(HOME_ACCOUNT_FILE, config['oauthAccount'])
-        _keychain_set(DEFAULT_SERVICE, incoming)
-        config['oauthAccount'] = incoming_account
-        _write_json(GLOBAL_CONFIG, config)
-        _write_loaded(target)
+        # From here on the slot, ~/.claude.json and .loaded must change together; a
+        # half-done swap would make _verify_owner refuse every later run.
+        config_written = False
+        try:
+            _keychain_set(DEFAULT_SERVICE, incoming)
+            _write_json(GLOBAL_CONFIG, {**config, 'oauthAccount': incoming_account})
+            config_written = True
+            _write_loaded(target)
+        except BaseException:
+            _keychain_set(DEFAULT_SERVICE, current)
+            if config_written:
+                _write_json(GLOBAL_CONFIG, config)
+                _write_loaded(owner)
+            raise
 
     return (
         f'default slot: {_label(owner)} -> {_label(target)} '
