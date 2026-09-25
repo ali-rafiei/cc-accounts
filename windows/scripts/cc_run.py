@@ -112,16 +112,33 @@ def share(profile_dir: Path) -> None:
 def list_profiles() -> list[str]:
     if not PROFILES_DIR.is_dir():
         return []
-    return sorted(p.name for p in PROFILES_DIR.iterdir() if p.is_dir() and is_profile_name(p.name))
+    return sorted(p.name for p in PROFILES_DIR.iterdir() if p.is_dir() and is_existing_profile_name(p.name))
 
 
 def is_profile_name(name: str) -> bool:
+    """A name cc-add may create."""
     return PROFILE_NAME.fullmatch(name) is not None and name.lower() not in RESERVED_NAMES
+
+
+def is_existing_profile_name(name: str) -> bool:
+    """A folder already there that cc, cc-use and ccusage-all all take as a profile.
+
+    Looser than a new name, so a folder made before names were narrowed still works: it only
+    has to open one folder and no other (no separator or drive colon, no trailing dot or
+    space), and not be reserved or hidden.
+    """
+    return (
+        bool(name)
+        and not any(c in name for c in '/\\:')
+        and name[:1] not in ('.', '_')
+        and name[-1:] not in ('.', ' ')
+        and name.lower() not in RESERVED_NAMES
+    )
 
 
 def require_profile(name: str) -> Path:
     path = PROFILES_DIR / name
-    if not is_profile_name(name) or not path.is_dir():
+    if not is_existing_profile_name(name) or not path.is_dir():
         raise ProfileError(f'no such profile: {name} (create it with: cc-add {name})')
     return path
 

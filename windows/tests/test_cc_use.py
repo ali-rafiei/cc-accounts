@@ -85,6 +85,19 @@ def test__load__default_writes_a_refreshed_token_back_to_its_profile(machine):
     assert cc_use.loaded_profile() is None
 
 
+def test__load__default_deletes_the_stash_once_the_users_login_is_back(machine):
+    # Arrange
+    cc_use.load('work')
+
+    # Act
+    cc_use.load(None)
+
+    # Assert: a copy left behind would go stale as the user's own login rotates.
+    assert machine['default'].read_text() == HOME_SECRET
+    assert not machine['stash'].exists()
+    assert not (machine['profiles'] / '.home-account.json').exists()
+
+
 def test__load__switching_between_profiles_leaves_the_stashed_login_alone(machine):
     # Arrange
     other = machine['profiles'] / 'other'
@@ -113,6 +126,22 @@ def test__load__rejects_names_that_are_not_profiles(machine, name):
     # Act / Assert
     with pytest.raises(cc_use.SwapError, match='no such profile'):
         cc_use.load(name)
+
+
+@pytest.mark.parametrize('folder', ['alice@corp', 'jos\u00e9', 'work+2', "o'brien", '-x'])
+def test__load__accepts_an_existing_folder_made_before_names_were_narrowed(machine, folder):
+    # Arrange
+    profile = machine['profiles'] / folder
+    profile.mkdir()
+    (profile / '.claude.json').write_text(json.dumps({'oauthAccount': WORK_ACCOUNT}))
+    (profile / '.credentials.json').write_text(WORK_SECRET)
+
+    # Act
+    cc_use.load(folder)
+
+    # Assert
+    assert cc_use.loaded_profile() == folder
+    assert machine['default'].read_text() == WORK_SECRET
 
 
 def test__load__records_the_profile_under_its_own_spelling(machine):
@@ -213,6 +242,84 @@ def test__load__a_failed_config_write_leaves_the_slot_as_it_was(machine, monkeyp
     assert machine['default'].read_text() == WORK_SECRET
 
 
+def test__load__an_interrupt_after_the_config_write_puts_everything_back(machine, monkeypatch):
+    # Arrange: Ctrl+C lands after the slot and ~/.claude.json changed, before .loaded did.
+    original_config = machine['global_config'].read_text()
+
+    def interrupted(profile):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cc_use, '_write_loaded', interrupted)
+
+    # Act
+    with pytest.raises(KeyboardInterrupt):
+        cc_use.load('work')
+
+    # Assert
+    assert machine['default'].read_text() == HOME_SECRET
+    assert machine['global_config'].read_text() == original_config
+
+
+def test__load__an_interrupt_after_the_loaded_write_clears_it_again(machine, monkeypatch):
+    # Arrange: Ctrl+C lands just after .loaded names work.
+    real_write_loaded = cc_use._write_loaded
+
+    def interrupted_after(profile):
+        real_write_loaded(profile)
+        if profile == 'work':
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(cc_use, '_write_loaded', interrupted_after)
+
+    # Act
+    with pytest.raises(KeyboardInterrupt):
+        cc_use.load('work')
+
+    # Assert
+    assert cc_use.loaded_profile() is None
+    assert machine['default'].read_text() == HOME_SECRET
+
+
+def test__load__rollback_goes_on_past_a_step_that_fails(machine, monkeypatch):
+    # Arrange: the .loaded write fails, and so does putting the slot's login back.
+    original_config = machine['global_config'].read_text()
+    real_write = cc_use._write_private
+    slot_writes = []
+
+    def write_private(path, text):
+        if path == machine['default']:
+            slot_writes.append(text)
+            if len(slot_writes) == 2:
+                raise cc_use.SwapError('slot stayed locked')
+        real_write(path, text)
+
+    def loaded_fails(profile):
+        if profile == 'work':
+            raise OSError(28, 'No space left on device')
+
+    monkeypatch.setattr(cc_use, '_write_private', write_private)
+    monkeypatch.setattr(cc_use, '_write_loaded', loaded_fails)
+
+    # Act: the original error surfaces, not the rollback's.
+    with pytest.raises(OSError, match='No space'):
+        cc_use.load('work')
+
+    # Assert: the config was still restored.
+    assert machine['global_config'].read_text() == original_config
+
+
+def test__load__refuses_when_a_session_refreshes_the_slot_while_it_waits(machine, monkeypatch):
+    # Arrange: a default session rotates its token between the identity check and the lock.
+    rotated = json.dumps({'claudeAiOauth': {'accessToken': 'home-at-2', 'refreshToken': 'home-rt-2'}})
+    _on_lock(monkeypatch, lambda: machine['default'].write_text(rotated))
+
+    # Act / Assert
+    with pytest.raises(cc_use.SwapError, match='mid-swap'):
+        cc_use.load('work')
+    assert machine['default'].read_text() == rotated
+    assert not machine['stash'].exists()
+
+
 def test__load__already_loaded_is_a_no_op(machine):
     # Arrange
     cc_use.load('work')
@@ -240,9 +347,9 @@ def test__verify_owner__offline_refuses_a_changed_login(machine):
 
 
 def test__forget__deletes_the_stashed_login_and_its_record(machine):
-    # Arrange: a round trip leaves a stale copy of the user's login in the stash.
-    cc_use.load('work')
-    cc_use.load(None)
+    # Arrange: an older cc-use left a copy of the user's login in the stash after a round trip.
+    machine['stash'].write_text(HOME_SECRET)
+    (machine['profiles'] / '.home-account.json').write_text(json.dumps(HOME_ACCOUNT))
 
     # Act
     cc_use.forget()
@@ -456,7 +563,7 @@ def test__forget__refuses_when_the_slot_holds_another_account(machine):
     _killed_mid_swap(machine, HOME_ACCOUNT)
 
     # Act / Assert
-    with pytest.raises(cc_use.SwapError, match=r'recorded default \(me@example.com\); not deleting'):
+    with pytest.raises(cc_use.SwapError, match="holds work's login, left by an interrupted swap"):
         cc_use.forget()
     assert machine['stash'].read_text() == HOME_SECRET
     assert (machine['profiles'] / '.home-account.json').exists()
@@ -467,16 +574,15 @@ def test__forget__offline_refuses_when_the_slot_login_is_not_the_stashed_one(mac
     _killed_mid_swap(machine, HOME_ACCOUNT)
     machine['identities'].clear()
 
-    # Act / Assert
-    with pytest.raises(cc_use.SwapError, match='could not confirm'):
+    # Act / Assert: the slot's login is work's own file, so it names the interrupted swap.
+    with pytest.raises(cc_use.SwapError, match='interrupted'):
         cc_use.forget()
     assert machine['stash'].read_text() == HOME_SECRET
 
 
 def test__forget__refuses_while_the_slot_is_empty(machine):
     # Arrange: a stash, and no login in the default slot at all.
-    cc_use.load('work')
-    cc_use.load(None)
+    _killed_mid_swap(machine, HOME_ACCOUNT)
     machine['default'].unlink()
 
     # Act / Assert
@@ -493,12 +599,137 @@ def test__load__refuses_to_overwrite_the_stash_with_a_profile_login(machine):
     (other / '.claude.json').write_text(json.dumps({'oauthAccount': {'accountUuid': 'uuid-other'}}))
     (other / '.credentials.json').write_text(json.dumps({'claudeAiOauth': {'accessToken': 'other-at'}}))
 
-    # Act / Assert: the refusal names the two files to delete if the stash really is stale.
+    # Act / Assert: the stash is the user's only copy, so the refusal points at `cc-use default`,
+    # never at deleting it.
     with pytest.raises(cc_use.SwapError, match=r'recorded default \(me@example.com\); not swapping') as refused:
         cc_use.load('other')
+    assert 'cc-use default' in str(refused.value)
+    assert str(machine['stash']) not in str(refused.value)
+    assert machine['stash'].read_text() == HOME_SECRET
+
+
+def test__load__a_loaded_profile_recorded_in_another_spelling_is_already_loaded(machine):
+    # Arrange: an older cc-use recorded WORK; then a session rotated work's token in the slot.
+    cc_use.load('work')
+    (machine['profiles'] / '.loaded').write_text('WORK\n')
+    rotated = json.dumps({'claudeAiOauth': {'accessToken': 'work-at-2', 'refreshToken': 'work-rt-2'}})
+    machine['default'].write_text(rotated)
+    machine['identities']['work-at-2'] = 'uuid-work'
+
+    # Act
+    message = cc_use.load('work')
+
+    # Assert: no swap of the folder with itself, which would put the stale copy in the slot.
+    assert 'already' in message
+    assert machine['default'].read_text() == rotated
+
+
+@pytest.mark.parametrize('content', ['', '{"oauthAccount": ', '[]', 'null'])
+def test__status__reports_a_corrupt_global_config_as_a_swap_error(machine, content):
+    # Arrange
+    machine['global_config'].write_text(content)
+
+    # Act / Assert
+    with pytest.raises(cc_use.SwapError, match='.claude.json'):
+        cc_use.status()
+
+
+def test__load__default_refuses_a_non_object_account_record_before_writing(machine):
+    # Arrange: work is loaded and the stashed account record is a JSON list, not an object.
+    cc_use.load('work')
+    (machine['profiles'] / '.home-account.json').write_text('[]')
+
+    # Act
+    with pytest.raises(cc_use.SwapError, match='home-account'):
+        cc_use.load(None)
+
+    # Assert
+    assert machine['default'].read_text() == WORK_SECRET
+    assert json.loads(machine['global_config'].read_text())['oauthAccount'] == WORK_ACCOUNT
+    assert cc_use.loaded_profile() == 'work'
+
+
+@pytest.mark.parametrize('online', [True, False], ids=['online', 'offline'])
+def test__load__default_finishes_a_swap_killed_before_it_recorded_the_profile(machine, online):
+    # Arrange: work's login is in the slot, the user's only in the stash, and no .loaded.
+    _killed_mid_swap(machine, WORK_ACCOUNT)
+    if not online:
+        machine['identities'].clear()
+
+    # Act
+    cc_use.load(None)
+
+    # Assert
+    assert machine['default'].read_text() == HOME_SECRET
+    assert json.loads(machine['global_config'].read_text())['oauthAccount'] == HOME_ACCOUNT
+    assert (machine['profiles'] / 'work' / '.credentials.json').read_text() == WORK_SECRET
+    assert not machine['stash'].exists()
+
+
+def test__load__default_leaves_a_profile_of_the_users_own_account_alone(machine):
+    # Arrange: a stash an older cc-use left, the user's login in the slot, and a profile of that
+    # same account, which must not be mistaken for a profile an interrupted swap left there.
+    machine['stash'].write_text(HOME_SECRET)
+    (machine['profiles'] / '.home-account.json').write_text(json.dumps(HOME_ACCOUNT))
+    personal = machine['profiles'] / 'personal'
+    personal.mkdir()
+    personal_secret = json.dumps({'claudeAiOauth': {'accessToken': 'personal-at', 'refreshToken': 'personal-rt'}})
+    (personal / '.claude.json').write_text(json.dumps({'oauthAccount': HOME_ACCOUNT}))
+    (personal / '.credentials.json').write_text(personal_secret)
+
+    # Act
+    message = cc_use.load(None)
+
+    # Assert
+    assert 'already' in message
+    assert (personal / '.credentials.json').read_text() == personal_secret
+    assert machine['default'].read_text() == HOME_SECRET
+
+
+def test__main__forget_exits_1_when_another_account_is_in_the_slot(machine, capsys, monkeypatch):
+    # Arrange
+    _killed_mid_swap(machine, HOME_ACCOUNT)
+
+    monkeypatch.setattr(cc_use.sys, 'platform', 'win32')  # main() refuses to run on macOS
+
+    # Act
+    code = cc_use.main(['forget'])
+
+    # Assert: uninstall stops on this, since deleting the stash would lose the user's login.
+    assert code == 1
+    assert 'cc-use default' in capsys.readouterr().err
+    assert machine['stash'].read_text() == HOME_SECRET
+
+
+def test__main__forget_exits_3_when_it_cannot_confirm_the_slot(machine, monkeypatch):
+    # Arrange: an older cc-use left a stash; the user's login has rotated since, and we are offline.
+    machine['stash'].write_text(HOME_SECRET)
+    (machine['profiles'] / '.home-account.json').write_text(json.dumps(HOME_ACCOUNT))
+    machine['default'].write_text(json.dumps({'claudeAiOauth': {'accessToken': 'x', 'refreshToken': 'home-rt-2'}}))
+    machine['identities'].clear()
+
+    monkeypatch.setattr(cc_use.sys, 'platform', 'win32')  # main() refuses to run on macOS
+
+    # Act
+    code = cc_use.main(['forget'])
+
+    # Assert: uninstall keeps going on this and keeps the harmless stash.
+    assert code == 3
+    assert machine['stash'].read_text() == HOME_SECRET
+
+
+def test__load__refusal_names_the_stash_files_when_the_slot_is_a_stranger(machine):
+    # Arrange: the user signed the default login in as an account no profile holds.
+    machine['stash'].write_text(HOME_SECRET)
+    (machine['profiles'] / '.home-account.json').write_text(json.dumps(HOME_ACCOUNT))
+    machine['default'].write_text(json.dumps({'claudeAiOauth': {'accessToken': 'stranger-at'}}))
+    machine['identities']['stranger-at'] = 'uuid-stranger'
+
+    # Act / Assert: here the stash may really be stale, so the refusal names the two files.
+    with pytest.raises(cc_use.SwapError, match='not swapping') as refused:
+        cc_use.load('work')
     assert str(machine['stash']) in str(refused.value)
     assert str(machine['profiles'] / '.home-account.json') in str(refused.value)
-    assert machine['stash'].read_text() == HOME_SECRET
 
 
 class _RedirectingProfileServer(http.server.BaseHTTPRequestHandler):

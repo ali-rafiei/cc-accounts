@@ -19,8 +19,9 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+from cc_run import is_existing_profile_name
+
 PROFILES_DIR = Path(os.environ.get('CLAUDE_PROFILES') or Path.home() / '.claude-profiles').expanduser()
-RESERVED_NAMES = {'bin', 'default'}  # never account profiles; neither is anything starting with . or _
 MAX_PARALLEL = 6
 SESSION = re.compile(r'Current session:\s*(\d+)%')
 WEEK_ALL = re.compile(r'Current week \(all models\):\s*(\d+)%')
@@ -55,7 +56,8 @@ def _discover() -> list[tuple[str, Path | None]]:
 
 
 def _is_profile(path: Path) -> bool:
-    return path.is_dir() and path.name not in RESERVED_NAMES and path.name[:1] not in ('.', '_')
+    # cc's own rule, so the table probes exactly the folders cc and cc-use accept.
+    return path.is_dir() and is_existing_profile_name(path.name)
 
 
 def _collect(profiles: list[tuple[str, Path | None]]) -> list[dict]:
@@ -103,11 +105,18 @@ def _current_account() -> str | None:
 
 
 def _loaded_profile() -> str | None:
-    """The profile cc-use has put in the default slot, if any."""
+    """The profile cc-use has put in the default slot, if any, spelled as its folder is.
+
+    Compared by folder like cc's guard, since Windows opens work's folder for WORK too.
+    """
     try:
-        return (PROFILES_DIR / '.loaded').read_text().strip() or None
+        loaded = (PROFILES_DIR / '.loaded').read_text().strip()
     except FileNotFoundError:
         return None
+    folder = PROFILES_DIR / loaded
+    if not loaded or not folder.is_dir():
+        return loaded or None
+    return next((p.name for p in PROFILES_DIR.iterdir() if p.is_dir() and os.path.samefile(p, folder)), loaded)
 
 
 def _parse_reset(reset: str) -> tuple[datetime | None, str]:
@@ -161,22 +170,29 @@ def _reset_days(date_part: str, now: datetime) -> list[date]:
 def _account_email(config_dir: Path | None) -> str | None:
     path = (config_dir / '.claude.json') if config_dir else (Path.home() / '.claude.json')
     try:
-        with path.open() as fh:
-            return (json.load(fh).get('oauthAccount') or {}).get('emailAddress')
-    except (OSError, json.JSONDecodeError):
+        # Claude Code writes UTF-8, not the locale's code page; utf-8-sig also takes a BOM.
+        with path.open(encoding='utf-8-sig') as fh:
+            config = json.load(fh)
+    except (OSError, ValueError):  # ValueError: bad JSON or bytes that are not UTF-8
         return None
+    account = config.get('oauthAccount') if isinstance(config, dict) else None
+    return account.get('emailAddress') if isinstance(account, dict) else None
 
 
 def _logged_in(status: str) -> bool:
     """Read `claude auth status` output, which may carry warning lines before its JSON."""
+    decoder = json.JSONDecoder()
+    # A warning line can hold a brace of its own, so try each one until an object parses.
     start = status.find('{')
-    if start < 0:
-        return False
-    try:
-        parsed, _ = json.JSONDecoder().raw_decode(status, start)
-    except json.JSONDecodeError:
-        return False
-    return parsed.get('loggedIn') is True
+    while start >= 0:
+        try:
+            parsed, _ = decoder.raw_decode(status, start)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict) and 'loggedIn' in parsed:
+            return parsed['loggedIn'] is True
+        start = status.find('{', start + 1)
+    return False
 
 
 def _error_line(out: str) -> str:

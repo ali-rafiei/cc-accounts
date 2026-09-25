@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timedelta
 
 import pytest
@@ -221,3 +222,95 @@ def test__parse_reset__reads_feb_29_in_a_leap_year(monkeypatch):
 
     # Assert
     assert resolved == datetime(2028, 2, 29, 15, 0)
+
+
+def test__account_email__reads_a_config_saved_with_a_bom(tmp_path):
+    # Arrange: Notepad and Windows PowerShell 5.1's `Set-Content -Encoding UTF8` write a BOM.
+    (tmp_path / '.claude.json').write_text('{"oauthAccount": {"emailAddress": "me@example.com"}}', encoding='utf-8-sig')
+
+    # Act
+    email = usage_table._account_email(tmp_path)
+
+    # Assert
+    assert email == 'me@example.com'
+
+
+def test__account_email__reads_utf8_whatever_the_locale_codec(tmp_path):
+    # Arrange: Claude Code writes UTF-8; Ł is C5 81, and 0x81 is undefined in Windows' cp1252.
+    config = {'oauthAccount': {'emailAddress': 'me@example.com', 'displayName': 'Łukasz'}, 'projects': {'C:/Łódź': {}}}
+    (tmp_path / '.claude.json').write_text(json.dumps(config, ensure_ascii=False), encoding='utf-8')
+
+    # Act
+    email = usage_table._account_email(tmp_path)
+
+    # Assert
+    assert email == 'me@example.com'
+
+
+def test__discover__skips_a_reserved_name_in_any_case(profiles):
+    # Arrange: `cc Default` and `cc-use Default` refuse it, so the table must not probe it either.
+    (profiles / 'Default').mkdir()
+
+    # Act
+    names = [name for name, _ in usage_table._discover()]
+
+    # Assert
+    assert names == ['personal', 'work']
+
+
+@pytest.mark.parametrize('folder', ['alice@corp', 'jos\u00e9', 'work+2', "o'brien", '-x', 'old & copy'])
+def test__discover__lists_an_existing_folder_cc_accepts(profiles, folder):
+    # Arrange: a folder made before names were narrowed; cc and cc-use still take it.
+    (profiles / folder).mkdir()
+
+    # Act
+    names = [name for name, _ in usage_table._discover()]
+
+    # Assert
+    assert folder in names
+
+
+def test__discover__probes_the_loaded_profile_through_the_default_login_under_any_spelling(profiles):
+    # Arrange: an older cc-use recorded the name as typed; Windows opens work's folder for WORK.
+    (profiles / '.loaded').write_text('WORK\n')
+
+    # Act
+    config_dirs = dict(usage_table._discover())
+
+    # Assert
+    assert config_dirs['work'] is None
+
+
+@pytest.mark.parametrize('content', ['[]', '{"oauthAccount": "me@example.com"}'])
+def test__account_email__treats_an_odd_json_shape_as_no_email(tmp_path, content):
+    # Arrange
+    (tmp_path / '.claude.json').write_text(content)
+
+    # Act
+    email = usage_table._account_email(tmp_path)
+
+    # Assert
+    assert email is None
+
+
+def test__render__marks_the_loaded_profile_under_any_spelling(profiles, capsys):
+    # Arrange
+    (profiles / '.loaded').write_text('WORK\n')
+    row = {'account': 'work@example.com', 'profile': 'work', 'note': 'not logged in', 'other': '', 'resets': ''}
+
+    # Act
+    usage_table._render([row])
+
+    # Assert
+    assert 'work [default]' in capsys.readouterr().out
+
+
+def test__logged_in__reads_the_json_after_a_warning_line_holding_a_brace():
+    # Arrange
+    status = 'Warning: ignoring {"theme"} in settings.json\n{"loggedIn": true}\n'
+
+    # Act
+    logged_in = usage_table._logged_in(status)
+
+    # Assert
+    assert logged_in is True

@@ -24,7 +24,7 @@ import urllib.request
 from contextlib import contextmanager
 from pathlib import Path
 
-from cc_run import is_profile_name
+from cc_run import is_existing_profile_name
 
 PROFILES_DIR = Path(os.environ.get('CLAUDE_PROFILES') or Path.home() / '.claude-profiles').expanduser()
 LOADED_FILE = PROFILES_DIR / '.loaded'
@@ -48,6 +48,8 @@ LOCK_TIMEOUT_S = 9.0
 # makes a Windows rename fail for a moment; retry briefly before giving up.
 REPLACE_ATTEMPTS = 10
 
+# `cc-use forget` exits with this when it only could not check the slot, so uninstall can go on.
+UNCONFIRMED_EXIT = 3
 PROFILE_URL = 'https://api.anthropic.com/api/oauth/profile'
 USAGE = """usage: cc-use                 show which account is in the default slot
        cc-use <profile>       load that profile's login into the default slot
@@ -57,6 +59,10 @@ USAGE = """usage: cc-use                 show which account is in the default sl
 
 class SwapError(Exception):
     """A swap refused or failed before it could leave the slot half-changed."""
+
+
+class UnconfirmedOwner(SwapError):
+    """Whose login the slot holds could not be checked (offline); a later retry can succeed."""
 
 
 class _RefuseRedirect(urllib.request.HTTPRedirectHandler):
@@ -83,6 +89,9 @@ def main(argv: list[str]) -> int:
             print(forget())
         else:
             print(load(None if argv[0] == 'default' else argv[0]))
+    except UnconfirmedOwner as exc:
+        print(f'cc-use: {exc}', file=sys.stderr)
+        return UNCONFIRMED_EXIT
     except SwapError as exc:
         print(f'cc-use: {exc}', file=sys.stderr)
         return 1
@@ -96,6 +105,10 @@ def status() -> str:
 
 def load(target: str | None) -> str:
     owner = loaded_profile()
+    if owner is None and target is None:
+        # A swap killed before it wrote .loaded: finish putting the user's login back.
+        slot = _read_secret(DEFAULT_CREDENTIALS)
+        owner = _interrupted_swap_owner(slot) if slot is not None else None
     if target == owner:
         return f'{_label(target)} is already in the default slot'
     if target is not None:
@@ -136,11 +149,24 @@ def load(target: str | None) -> str:
             _write_loaded(target)
         except BaseException:
             # Half a swap strands the slot: its login would no longer match what cc-use
-            # recorded, and every retry would be refused. Put all three back as they were.
-            _write_private(DEFAULT_CREDENTIALS, current)
-            _write_private(GLOBAL_CONFIG, config_text)
-            _write_loaded(owner)
+            # recorded, and every retry would be refused. Put all three back as they were,
+            # each on its own, so one restore that fails does not skip the others.
+            restores = (
+                (DEFAULT_CREDENTIALS, lambda: _write_private(DEFAULT_CREDENTIALS, current)),
+                (GLOBAL_CONFIG, lambda: _write_private(GLOBAL_CONFIG, config_text)),
+                (LOADED_FILE, lambda: _write_loaded(owner)),
+            )
+            for path, restore in restores:
+                try:
+                    restore()
+                except Exception as exc:  # the swap's own error is the one raised below
+                    print(f'cc-use: could not put {path} back ({exc})', file=sys.stderr)
             raise
+        if target is None:
+            # The slot holds the user's own login again, so the stash is now a copy that goes
+            # stale as that login rotates. The stash goes first: no stash may outlive its record.
+            HOME_STASH_FILE.unlink(missing_ok=True)
+            HOME_ACCOUNT_FILE.unlink(missing_ok=True)
 
     return (
         f'default slot: {_label(owner)} -> {_label(target)} '
@@ -159,6 +185,12 @@ def forget() -> str:
         current = _read_secret(DEFAULT_CREDENTIALS)
         if current is None:
             raise SwapError('the default slot holds no login, so the stash is your only copy; not deleting it')
+        swapped_in = _interrupted_swap_owner(current)
+        if swapped_in is not None:
+            raise SwapError(
+                f"the default slot holds {swapped_in}'s login, left by an interrupted swap, so the stash "
+                'is your only copy; run `cc-use default` to put yours back'
+            )
         _verify_owner(current, None, doing='deleting the stash')
     HOME_STASH_FILE.unlink(missing_ok=True)
     HOME_ACCOUNT_FILE.unlink(missing_ok=True)
@@ -166,10 +198,20 @@ def forget() -> str:
 
 
 def loaded_profile() -> str | None:
+    """The profile in the default slot, spelled as its folder is, so every comparison is by folder.
+
+    An older cc-use recorded the name as typed (WORK), which Windows opens as work's folder.
+    """
     try:
-        return LOADED_FILE.read_text().strip() or None
+        loaded = LOADED_FILE.read_text().strip()
     except FileNotFoundError:
         return None
+    folder = PROFILES_DIR / loaded
+    if loaded and folder.is_dir():
+        for candidate in PROFILES_DIR.iterdir():
+            if candidate.is_dir() and os.path.samefile(candidate, folder):
+                return candidate.name
+    return loaded or None
 
 
 def _label(profile: str | None) -> str:
@@ -185,7 +227,7 @@ def _owner_file(profile: str | None) -> Path:
 
 def _require_profile(name: str) -> str:
     """The profile's name as its folder spells it, since Windows opens work's folder for WORK too."""
-    if is_profile_name(name) and (PROFILES_DIR / name).is_dir():
+    if is_existing_profile_name(name) and (PROFILES_DIR / name).is_dir():
         for folder in PROFILES_DIR.iterdir():
             if folder.name.lower() == name.lower():
                 return folder.name
@@ -249,7 +291,13 @@ def _verify_owner(current: str, owner: str | None, doing: str = 'swapping') -> N
     if identity is not None:
         if identity['uuid'] != expected.get('accountUuid'):
             hint = ''
-            if owner is None and stored is not None:
+            swapped_in = _profiles_holding(current, identity) if owner is None and stored is not None else []
+            if swapped_in:
+                hint = (
+                    f". It holds {swapped_in[0]}'s login, left by an interrupted swap; "
+                    'run `cc-use default` to put yours back'
+                )
+            elif owner is None and stored is not None:
                 hint = (
                     f'. If you have since logged in as yourself again and the stash is stale, '
                     f'delete {HOME_STASH_FILE} and {HOME_ACCOUNT_FILE} by hand'
@@ -261,10 +309,47 @@ def _verify_owner(current: str, owner: str | None, doing: str = 'swapping') -> N
         return
     if stored is None or _oauth(stored).get('refreshToken') == _oauth(current).get('refreshToken'):
         return
-    raise SwapError(
+    raise UnconfirmedOwner(
         'could not confirm whose login is in the default slot (offline, or its '
         'access token expired); send one message in any default session, then retry'
     )
+
+
+def _interrupted_swap_owner(current: str) -> str | None:
+    """The profile a swap killed before it wrote .loaded left in the slot, when exactly one fits.
+
+    None when there is no stash, or the slot holds the user's own account: a profile of that
+    same account is not proof of an interrupted swap.
+    """
+    stash = _read_secret(HOME_STASH_FILE)
+    if stash is None:
+        return None
+    identity = _fetch_identity(_oauth(current).get('accessToken'))
+    if identity is not None and identity['uuid'] == _home_account(stash).get('accountUuid'):
+        return None
+    matches = _profiles_holding(current, identity)
+    return matches[0] if len(matches) == 1 else None
+
+
+def _profiles_holding(current: str, identity: dict | None) -> list[str]:
+    """The profiles whose login the slot holds: by account online, by refresh token offline."""
+    refresh_token = _oauth(current).get('refreshToken')
+    matches = []
+    for folder in sorted(PROFILES_DIR.iterdir()):
+        if not (folder.is_dir() and is_existing_profile_name(folder.name)):
+            continue
+        if identity is not None:
+            try:
+                account = _read_json(folder / '.claude.json').get('oauthAccount')
+            except SwapError:
+                continue
+            if isinstance(account, dict) and account.get('accountUuid') == identity['uuid']:
+                matches.append(folder.name)
+        elif refresh_token:
+            stored = _read_secret(folder / CREDENTIALS_FILE_NAME)
+            if stored is not None and _oauth(stored).get('refreshToken') == refresh_token:
+                matches.append(folder.name)
+    return matches
 
 
 def _home_account(stash: str | None) -> dict:
@@ -320,9 +405,14 @@ def _write_loaded(profile: str | None) -> None:
 def _read_json(path: Path) -> dict:
     try:
         # utf-8-sig: Notepad and Windows PowerShell 5.1 save UTF-8 with a BOM, which json.loads rejects.
-        return json.loads(path.read_text(encoding='utf-8-sig'))
+        data = json.loads(path.read_text(encoding='utf-8-sig'))
     except FileNotFoundError as exc:
         raise SwapError(f'missing {path}') from exc
+    except ValueError as exc:  # bad JSON, or bytes that are not UTF-8
+        raise SwapError(f'{path} is not valid JSON ({exc}); not touching it') from exc
+    if not isinstance(data, dict):
+        raise SwapError(f'{path} holds {type(data).__name__}, not a JSON object; not touching it')
+    return data
 
 
 def _read_secret(path: Path) -> str | None:
