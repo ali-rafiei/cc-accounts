@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import random
+import re
 import subprocess
 import sys
 import tempfile
@@ -273,8 +274,12 @@ def _write_json(path: Path, data: dict) -> None:
 
 
 def _keychain_account() -> str:
-    """The account name Claude Code files its Keychain items under: $USER, else the login name."""
-    return os.environ.get('USER') or pwd.getpwuid(os.geteuid()).pw_name
+    """The account name Claude Code files its Keychain items under: $USER, else the login name.
+
+    Claude Code substitutes a fixed name for one outside [a-zA-Z0-9._-].
+    """
+    name = os.environ.get('USER') or pwd.getpwuid(os.geteuid()).pw_name
+    return name if re.fullmatch(r'[a-zA-Z0-9._-]+', name) else 'claude-code-user'
 
 
 def _keychain_get(service: str) -> str | None:

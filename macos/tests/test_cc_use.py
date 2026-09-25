@@ -278,3 +278,23 @@ def test__owner_service__hashes_the_nfc_form_like_claude_code(machine):
 
     # Assert
     assert service == f'Claude Code-credentials-{expected_digest}'
+
+
+@pytest.mark.parametrize('user', ['jane doe', 'j\u00f6rg', 'corp\\jane', 'a"b'])
+def test__keychain_account__falls_back_like_claude_code_for_an_unusual_user(monkeypatch, user):
+    # Arrange: Claude Code files its items under "claude-code-user" when $USER is not [a-zA-Z0-9._-]+.
+    monkeypatch.setenv('USER', user)
+
+    # Act
+    account = cc_use._keychain_account()
+
+    # Assert
+    assert account == 'claude-code-user'
+
+
+def test__keychain_account__uses_a_plain_user_name_as_is(monkeypatch):
+    # Arrange
+    monkeypatch.setenv('USER', 'jane.doe_2-x')
+
+    # Act / Assert
+    assert cc_use._keychain_account() == 'jane.doe_2-x'
