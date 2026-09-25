@@ -84,10 +84,15 @@ function Uninstall-Scripts {
     }
     $stashFiles = @((Join-Path $dest '.home-credentials.json'), (Join-Path $dest '.home-account.json'))
     if (($stashFiles | Where-Object { Test-Path $_ }).Count -gt 0) {
-        # forget refuses when it cannot confirm the slot holds your own login; the rest still goes.
-        if ((Invoke-Python (Join-Path $dest 'cc_use.py') forget) -ne 0) {
+        # forget exits 3 when it only could not check the slot (offline): the stash is then a
+        # harmless spare and the rest still goes. Any other refusal means the stash may be your
+        # only login, so nothing is removed, cc-use included.
+        $forget = Invoke-Python (Join-Path $dest 'cc_use.py') forget
+        if ($forget -eq 3) {
             $quoted = ($stashFiles | ForEach-Object { "'$($_ -replace "'", "''")'" }) -join ', '
             Write-Warning "cc-use kept its stashed copy of your login (reason above). It is harmless; once your own login is back in the default slot, delete it with: Remove-Item -Force $quoted"
+        } elseif ($forget -ne 0) {
+            Write-Error 'cc-use would not delete its stashed copy of your login (reason above), so nothing was uninstalled. Run `cc-use default` first.'
         }
     }
     foreach ($name in $scripts) { Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $dest $name) }
