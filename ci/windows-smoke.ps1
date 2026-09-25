@@ -153,11 +153,20 @@ Assert (-not (Test-Path (Join-Path $HOME '.claude\skills\cc-use'))) 'uninstall r
 Assert (Test-Path (Join-Path $repo 'windows\skills\cc-use\SKILL.md')) 'removing a skill junction leaves the repo copy'
 Assert (Test-Path $work) 'uninstall keeps the profile'
 
-# Uninstall goes on when cc-use refuses to delete its stash, and says how to delete it later.
+# Uninstall stops before removing anything when cc-use says another account is in the slot,
+# since the stash then holds the user's only login.
 Invoke-Installer @() | Out-Null
 $stash = Join-Path $profiles '.home-credentials.json'
 Set-Content $stash '{"claudeAiOauth": {"refreshToken": "home-rt"}}'
-Set-Content (Join-Path $profiles 'cc_use.py') "import sys`nprint('cc-use: not deleting it', file=sys.stderr)`nsys.exit(1)"
+Set-Content (Join-Path $profiles 'cc_use.py') "import sys`nprint('cc-use: work is in the slot', file=sys.stderr)`nsys.exit(1)"
+$stopped = $false
+try { Invoke-Installer @('-Uninstall') | Out-Null } catch { $stopped = $true }
+Assert $stopped 'uninstall fails when cc-use refuses because another account is in the slot'
+Assert ((Test-Path $stash) -and (Test-Path (Join-Path $profiles 'profiles.ps1'))) 'uninstall removes nothing when another account is in the slot'
+Assert ([IO.File]::ReadAllText($ps7Profile).Contains('claude-multi-account')) 'uninstall keeps the profile line when another account is in the slot'
+
+# Uninstall goes on when cc-use only could not confirm the slot, and says how to delete the stash later.
+Set-Content (Join-Path $profiles 'cc_use.py') "import sys`nprint('cc-use: could not confirm', file=sys.stderr)`nsys.exit(3)"
 $out = Invoke-Installer @('-Uninstall')
 Assert ($out.Contains('kept') -and $out.Contains('.home-credentials.json')) "uninstall reports the kept stash and how to delete it: $out"
 Assert (Test-Path $stash) 'uninstall leaves the stash when cc-use refuses'
