@@ -364,14 +364,14 @@ def _lock_dir(path: Path, stale_s: float):
             held_for = time.time() - path.stat().st_mtime
         except FileNotFoundError:
             continue
+        if time.monotonic() > deadline:
+            raise SwapError(f'{path.name} stayed held (Claude Code is refreshing a login); retry shortly')
         if held_for > stale_s:
             try:
                 os.rmdir(path)
             except OSError:
                 time.sleep(0.05)
             continue
-        if time.monotonic() > deadline:
-            raise SwapError(f'{path.name} stayed held (Claude Code is refreshing a login); retry shortly')
         time.sleep(0.25 + random.random() * 0.25)
 
     stop = threading.Event()

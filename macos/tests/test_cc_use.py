@@ -3,6 +3,7 @@ import http.client
 import io
 import json
 import os
+import threading
 import time
 import unicodedata
 
@@ -400,3 +401,30 @@ def test__fetch_identity__treats_a_broken_response_as_unknown(monkeypatch, read)
 
     # Assert: unknown sends _verify_owner down its offline path instead of crashing.
     assert identity is None
+
+
+def test__lock_dir__gives_up_on_a_stale_lock_it_cannot_remove(tmp_path, monkeypatch):
+    # Arrange: a stale lock directory that rmdir refuses (not empty), with a short timeout.
+    monkeypatch.setattr(cc_use, 'LOCK_TIMEOUT_S', 0.3)
+    lock = tmp_path / 'x.lock'
+    lock.mkdir()
+    (lock / 'stray').write_text('')
+    old = time.time() - 120
+    os.utime(lock, (old, old))
+    raised = []
+
+    def take():
+        try:
+            with cc_use._lock_dir(lock, stale_s=60):
+                pass
+        except cc_use.SwapError as exc:
+            raised.append(exc)
+
+    # Act
+    taker = threading.Thread(target=take, daemon=True)
+    taker.start()
+    taker.join(timeout=3.0)
+
+    # Assert
+    assert not taker.is_alive(), '_lock_dir spun past its timeout'
+    assert raised and 'stayed held' in str(raised[0])
