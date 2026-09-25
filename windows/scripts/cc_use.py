@@ -242,7 +242,7 @@ def _fetch_identity(access_token: str | None) -> dict | None:
 
 def _oauth(credentials: str) -> dict:
     try:
-        return json.loads(credentials).get('claudeAiOauth') or {}
+        return json.loads(credentials.lstrip('\ufeff')).get('claudeAiOauth') or {}
     except json.JSONDecodeError:
         return {}
 
@@ -263,7 +263,8 @@ def _write_loaded(profile: str | None) -> None:
 
 def _read_json(path: Path) -> dict:
     try:
-        return json.loads(path.read_text(encoding='utf-8'))
+        # utf-8-sig: Notepad and Windows PowerShell 5.1 save UTF-8 with a BOM, which json.loads rejects.
+        return json.loads(path.read_text(encoding='utf-8-sig'))
     except FileNotFoundError as exc:
         raise SwapError(f'missing {path}') from exc
 

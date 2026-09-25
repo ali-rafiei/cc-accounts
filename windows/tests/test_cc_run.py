@@ -118,6 +118,22 @@ def test__run__shares_skills_plugins_and_plugin_settings(machine, capfd):
     assert settings == {'theme': 'light', 'enabledPlugins': {'tool@market': True}}
 
 
+def test__run__reads_plugin_settings_saved_with_a_bom(machine, capfd):
+    # Arrange: Notepad and Windows PowerShell 5.1's `Set-Content -Encoding UTF8` write a BOM.
+    (machine['profiles'] / 'work').mkdir()
+    (machine['claude_home'] / 'settings.json').write_text(
+        json.dumps({'enabledPlugins': {'tool@market': True}}), encoding='utf-8-sig'
+    )
+
+    # Act
+    code = cc_run.run('work', [])
+
+    # Assert
+    assert code == 0
+    settings = json.loads((machine['profiles'] / 'work' / 'settings.json').read_text(encoding='utf-8'))
+    assert settings == {'enabledPlugins': {'tool@market': True}}
+
+
 def test__share__leaves_a_real_directory_alone(machine):
     # Arrange
     profile = machine['profiles'] / 'work'

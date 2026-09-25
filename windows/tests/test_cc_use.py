@@ -156,6 +156,25 @@ def test__load__refuses_when_the_slot_holds_an_unexpected_account(machine):
     assert (machine['profiles'] / 'work' / '.credentials.json').read_text() == WORK_SECRET
 
 
+def test__load__reads_a_global_config_saved_with_a_bom(machine):
+    # Arrange: Notepad and Windows PowerShell 5.1's `Set-Content -Encoding UTF8` write a BOM.
+    machine['global_config'].write_text(json.dumps({'oauthAccount': HOME_ACCOUNT}), encoding='utf-8-sig')
+
+    # Act
+    cc_use.load('work')
+
+    # Assert
+    assert json.loads(machine['global_config'].read_text(encoding='utf-8'))['oauthAccount'] == WORK_ACCOUNT
+
+
+def test__verify_owner__reads_credentials_saved_with_a_bom(machine):
+    # Arrange: the slot's login is work's own, but its file starts with a BOM.
+    current = '\ufeff' + WORK_SECRET
+
+    # Act / Assert: no exception, the identity check sees work's access token
+    cc_use._verify_owner(current, 'work')
+
+
 def test__load__already_loaded_is_a_no_op(machine):
     # Arrange
     cc_use.load('work')

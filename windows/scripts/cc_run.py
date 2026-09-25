@@ -132,8 +132,9 @@ def loaded_profile() -> str | None:
 
 def _mirror_plugin_settings(target_path: Path) -> None:
     source_path = CLAUDE_HOME / 'settings.json'
-    source = json.loads(source_path.read_text(encoding='utf-8')) if source_path.exists() else {}
-    target = json.loads(target_path.read_text(encoding='utf-8')) if target_path.exists() else {}
+    # utf-8-sig: Notepad and Windows PowerShell 5.1 save UTF-8 with a BOM, which json.loads rejects.
+    source = json.loads(source_path.read_text(encoding='utf-8-sig')) if source_path.exists() else {}
+    target = json.loads(target_path.read_text(encoding='utf-8-sig')) if target_path.exists() else {}
     merged = {**target, **{k: source[k] for k in MIRRORED_SETTINGS if k in source}}
     if merged != target:
         target_path.write_text(json.dumps(merged, indent=2) + '\n', encoding='utf-8')
