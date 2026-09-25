@@ -213,6 +213,84 @@ def test__load__a_failed_config_write_leaves_the_slot_as_it_was(machine, monkeyp
     assert machine['default'].read_text() == WORK_SECRET
 
 
+def test__load__an_interrupt_after_the_config_write_puts_everything_back(machine, monkeypatch):
+    # Arrange: Ctrl+C lands after the slot and ~/.claude.json changed, before .loaded did.
+    original_config = machine['global_config'].read_text()
+
+    def interrupted(profile):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cc_use, '_write_loaded', interrupted)
+
+    # Act
+    with pytest.raises(KeyboardInterrupt):
+        cc_use.load('work')
+
+    # Assert
+    assert machine['default'].read_text() == HOME_SECRET
+    assert machine['global_config'].read_text() == original_config
+
+
+def test__load__an_interrupt_after_the_loaded_write_clears_it_again(machine, monkeypatch):
+    # Arrange: Ctrl+C lands just after .loaded names work.
+    real_write_loaded = cc_use._write_loaded
+
+    def interrupted_after(profile):
+        real_write_loaded(profile)
+        if profile == 'work':
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(cc_use, '_write_loaded', interrupted_after)
+
+    # Act
+    with pytest.raises(KeyboardInterrupt):
+        cc_use.load('work')
+
+    # Assert
+    assert cc_use.loaded_profile() is None
+    assert machine['default'].read_text() == HOME_SECRET
+
+
+def test__load__rollback_goes_on_past_a_step_that_fails(machine, monkeypatch):
+    # Arrange: the .loaded write fails, and so does putting the slot's login back.
+    original_config = machine['global_config'].read_text()
+    real_write = cc_use._write_private
+    slot_writes = []
+
+    def write_private(path, text):
+        if path == machine['default']:
+            slot_writes.append(text)
+            if len(slot_writes) == 2:
+                raise cc_use.SwapError('slot stayed locked')
+        real_write(path, text)
+
+    def loaded_fails(profile):
+        if profile == 'work':
+            raise OSError(28, 'No space left on device')
+
+    monkeypatch.setattr(cc_use, '_write_private', write_private)
+    monkeypatch.setattr(cc_use, '_write_loaded', loaded_fails)
+
+    # Act: the original error surfaces, not the rollback's.
+    with pytest.raises(OSError, match='No space'):
+        cc_use.load('work')
+
+    # Assert: the config was still restored.
+    assert machine['global_config'].read_text() == original_config
+
+
+def test__load__refuses_when_a_session_refreshes_the_slot_while_it_waits(machine, monkeypatch):
+    # Arrange: a default session rotates its token between the identity check and the lock.
+    rotated = json.dumps({'claudeAiOauth': {'accessToken': 'home-at-2', 'refreshToken': 'home-rt-2'}})
+    _on_lock(monkeypatch, lambda: machine['default'].write_text(rotated))
+
+    # Act / Assert
+    with pytest.raises(cc_use.SwapError, match='mid-swap'):
+        cc_use.load('work')
+    assert machine['default'].read_text() == rotated
+    assert not machine['stash'].exists()
+
+
 def test__load__already_loaded_is_a_no_op(machine):
     # Arrange
     cc_use.load('work')

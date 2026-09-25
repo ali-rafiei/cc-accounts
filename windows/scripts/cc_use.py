@@ -136,10 +136,18 @@ def load(target: str | None) -> str:
             _write_loaded(target)
         except BaseException:
             # Half a swap strands the slot: its login would no longer match what cc-use
-            # recorded, and every retry would be refused. Put all three back as they were.
-            _write_private(DEFAULT_CREDENTIALS, current)
-            _write_private(GLOBAL_CONFIG, config_text)
-            _write_loaded(owner)
+            # recorded, and every retry would be refused. Put all three back as they were,
+            # each on its own, so one restore that fails does not skip the others.
+            restores = (
+                (DEFAULT_CREDENTIALS, lambda: _write_private(DEFAULT_CREDENTIALS, current)),
+                (GLOBAL_CONFIG, lambda: _write_private(GLOBAL_CONFIG, config_text)),
+                (LOADED_FILE, lambda: _write_loaded(owner)),
+            )
+            for path, restore in restores:
+                try:
+                    restore()
+                except Exception as exc:  # the swap's own error is the one raised below
+                    print(f'cc-use: could not put {path} back ({exc})', file=sys.stderr)
             raise
 
     return (
