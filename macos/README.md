@@ -31,9 +31,9 @@ Skills, so you can ask Claude directly:
 ```text
 ACCOUNT             PROFILE           SESSION  WEEK  OTHER LIMITS  WEEK RESETS
 ------------------  ----------------  -------  ----  ------------  ---------------
-work@example.com    work [default] *  12%      31%   Opus 18%      Saturday at 3am
-me@example.com      personal          0%       64%   Opus 70%      Tuesday at 1pm
-team-2@example.com  team-2            0%       2%    Opus 0%       Thursday at 7pm
+work@example.com    work [default] *  12%      31%   Fable 18%     Saturday at 3am
+me@example.com      personal          0%       64%   Fable 70%     Tuesday at 1pm
+team-2@example.com  team-2            0%       2%    Fable 0%      Thursday at 7pm
 ```
 
 `*` marks the account the current session runs as. `[default]` marks the profile `cc-use`
