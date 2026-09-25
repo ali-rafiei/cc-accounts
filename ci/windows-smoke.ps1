@@ -24,14 +24,15 @@ function Assert([bool]$condition, [string]$what) {
 function Invoke-Shell([string]$command, [switch]$UserProfile) {
     # A fresh shell that loads the commands the way a user's profile would: by dot-sourcing
     # profiles.ps1, or with -UserProfile through the line the installer put in the profile.
-    # -EncodedCommand carries quotes intact. Some commands are meant to fail and print to
-    # stderr; that must not stop this script.
+    # A script file carries quotes intact (-EncodedCommand would make the child's stderr
+    # CLIXML). Some commands are meant to fail and print to stderr; that must not stop this.
     $ErrorActionPreference = 'Continue'
     if (-not $UserProfile) { $command = ". '$($profiles -replace "'", "''")\profiles.ps1'; $command" }
-    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
-    $flags = @('-NoLogo', '-ExecutionPolicy', 'Bypass', '-OutputFormat', 'Text')
+    $script = Join-Path $env:RUNNER_TEMP 'smoke-command.ps1'
+    [IO.File]::WriteAllText($script, $command, (New-Object Text.UTF8Encoding $true))
+    $flags = @('-NoLogo', '-ExecutionPolicy', 'Bypass')
     if (-not $UserProfile) { $flags += '-NoProfile' }
-    $out = & $Shell @flags -EncodedCommand $encoded 2>&1 | Out-String
+    $out = & $Shell @flags -File $script 2>&1 | Out-String
     return $out.Trim()
 }
 
