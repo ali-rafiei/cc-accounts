@@ -166,10 +166,20 @@ def forget() -> str:
 
 
 def loaded_profile() -> str | None:
+    """The profile in the default slot, spelled as its folder is, so every comparison is by folder.
+
+    An older cc-use recorded the name as typed (WORK), which Windows opens as work's folder.
+    """
     try:
-        return LOADED_FILE.read_text().strip() or None
+        loaded = LOADED_FILE.read_text().strip()
     except FileNotFoundError:
         return None
+    folder = PROFILES_DIR / loaded
+    if loaded and folder.is_dir():
+        for candidate in PROFILES_DIR.iterdir():
+            if candidate.is_dir() and os.path.samefile(candidate, folder):
+                return candidate.name
+    return loaded or None
 
 
 def _label(profile: str | None) -> str:

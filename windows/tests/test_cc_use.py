@@ -501,6 +501,22 @@ def test__load__refuses_to_overwrite_the_stash_with_a_profile_login(machine):
     assert machine['stash'].read_text() == HOME_SECRET
 
 
+def test__load__a_loaded_profile_recorded_in_another_spelling_is_already_loaded(machine):
+    # Arrange: an older cc-use recorded WORK; then a session rotated work's token in the slot.
+    cc_use.load('work')
+    (machine['profiles'] / '.loaded').write_text('WORK\n')
+    rotated = json.dumps({'claudeAiOauth': {'accessToken': 'work-at-2', 'refreshToken': 'work-rt-2'}})
+    machine['default'].write_text(rotated)
+    machine['identities']['work-at-2'] = 'uuid-work'
+
+    # Act
+    message = cc_use.load('work')
+
+    # Assert: no swap of the folder with itself, which would put the stale copy in the slot.
+    assert 'already' in message
+    assert machine['default'].read_text() == rotated
+
+
 @pytest.mark.parametrize('content', ['', '{"oauthAccount": ', '[]', 'null'])
 def test__status__reports_a_corrupt_global_config_as_a_swap_error(machine, content):
     # Arrange
