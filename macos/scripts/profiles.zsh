@@ -28,6 +28,8 @@ cc() {
   fi
   shift
   if [[ "$profile" == default ]]; then
+    # A shell started inside a profile's session inherits its CLAUDE_CONFIG_DIR.
+    local CLAUDE_CONFIG_DIR; unset CLAUDE_CONFIG_DIR
     claude "$@"
   elif _cc_is_profile "$profile"; then
     # While cc-use has this login in the default slot, the profile's own copy may be
@@ -81,11 +83,12 @@ ccusage-all() {
     python3 "$base/usage_table.py"
     return
   fi
-  local loaded="$(_cc_loaded)" profile
+  local loaded="$(_cc_loaded)" profile CLAUDE_CONFIG_DIR
+  unset CLAUDE_CONFIG_DIR  # inherited inside a profile's session; the default takes none
   print -P "%B=== default ===%b"
   claude -p "/usage" < /dev/null 2>&1
   print
-  for profile in $(_cc_profiles); do
+  for profile in ${(f)"$(_cc_profiles)"}; do
     [[ "$profile" == "$loaded" ]] && continue  # cc-use put it in the default slot, printed above
     print -P "%B=== $profile ===%b"
     CLAUDE_CONFIG_DIR="$base/$profile" claude -p "/usage" < /dev/null 2>&1
