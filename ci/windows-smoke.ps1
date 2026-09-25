@@ -141,6 +141,17 @@ Assert (-not (Test-Path (Join-Path $HOME '.claude\skills\cc-use'))) 'uninstall r
 Assert (Test-Path (Join-Path $repo 'windows\skills\cc-use\SKILL.md')) 'removing a skill junction leaves the repo copy'
 Assert (Test-Path $work) 'uninstall keeps the profile'
 
+# Uninstall goes on when cc-use refuses to delete its stash, and says how to delete it later.
+Invoke-Installer @() | Out-Null
+$stash = Join-Path $profiles '.home-credentials.json'
+Set-Content $stash '{"claudeAiOauth": {"refreshToken": "home-rt"}}'
+Set-Content (Join-Path $profiles 'cc_use.py') "import sys`nprint('cc-use: not deleting it', file=sys.stderr)`nsys.exit(1)"
+$out = Invoke-Installer @('-Uninstall')
+Assert ($out.Contains('kept') -and $out.Contains('.home-credentials.json')) "uninstall reports the kept stash and how to delete it: $out"
+Assert (Test-Path $stash) 'uninstall leaves the stash when cc-use refuses'
+Assert (-not ([IO.File]::ReadAllText($ps7Profile).Contains('claude-multi-account'))) 'uninstall still removes the line when cc-use refuses'
+Remove-Item $stash
+
 # A custom profiles folder whose path has a space and an apostrophe, as under C:\Users\O'Brien.
 $custom = Join-Path $env:RUNNER_TEMP "O'Brien profiles"
 New-Item -ItemType Directory -Force -Path (Join-Path $custom 'work') | Out-Null

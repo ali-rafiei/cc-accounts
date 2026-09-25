@@ -12,6 +12,7 @@ refreshed (rotated) its token. The lock protocol follows claude-swap
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import random
@@ -19,7 +20,6 @@ import sys
 import tempfile
 import threading
 import time
-import urllib.error
 import urllib.request
 from contextlib import contextmanager
 from pathlib import Path
@@ -59,6 +59,13 @@ class SwapError(Exception):
     """A swap refused or failed before it could leave the slot half-changed."""
 
 
+class _RefuseRedirect(urllib.request.HTTPRedirectHandler):
+    """urllib would re-send the Bearer token to wherever a redirect points; a 3xx becomes an HTTPError instead."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 def main(argv: list[str]) -> int:
     if argv and argv[0] in ('-h', '--help'):
         print(USAGE)
@@ -83,7 +90,7 @@ def main(argv: list[str]) -> int:
 
 
 def status() -> str:
-    email = _read_json(GLOBAL_CONFIG).get('oauthAccount', {}).get('emailAddress')
+    email = (_read_json(GLOBAL_CONFIG).get('oauthAccount') or {}).get('emailAddress')
     return f'default slot: {_label(loaded_profile())} ({email})'
 
 
@@ -95,24 +102,33 @@ def load(target: str | None) -> str:
         target = _require_profile(target)
         if target == owner:
             return f'{target} is already in the default slot'
-        _refuse_if_running(target)
     current = _read_secret(DEFAULT_CREDENTIALS)
     if current is None:
         raise SwapError('the default slot holds no login; run `claude auth login` first')
+    # The identity request stays outside the lock, which Claude Code's own refreshes wait on.
     _verify_owner(current, owner)
-    incoming = _read_secret(_owner_file(target))
-    if incoming is None:
-        raise SwapError(f'{target} is not logged in (cc-login {target})' if target else 'no stashed login to restore')
-    incoming_account = _profile_account(target) if target else _read_json(HOME_ACCOUNT_FILE)
 
     with _credentials_lock(), _config_lock():
         if _read_secret(DEFAULT_CREDENTIALS) != current:
             raise SwapError('a session refreshed the default login mid-swap; retry')
+        # Checked under the lock, so a `cc <profile>` started, or a refresh made, since cc-use began is seen.
+        if target is not None:
+            _refuse_if_running(target)
+        incoming = _read_secret(_owner_file(target))
+        if incoming is None:
+            raise SwapError(
+                f'{target} is not logged in (cc-login {target})' if target else 'no stashed login to restore'
+            )
+        incoming_account = _profile_account(target) if target else _read_json(HOME_ACCOUNT_FILE)
         config_text = _read_secret(GLOBAL_CONFIG)
         config = _read_json(GLOBAL_CONFIG)
-        _write_private(_owner_file(owner), current)
+        # The record goes first: uninstall runs `forget` off these files, so no stash may outlive it.
         if owner is None:
-            _write_private(HOME_ACCOUNT_FILE, json.dumps(config['oauthAccount'], indent=2))
+            home_account = config.get('oauthAccount')
+            if not isinstance(home_account, dict) or not home_account:
+                raise SwapError(f'{GLOBAL_CONFIG} records no oauthAccount for the default login; not swapping')
+            _write_private(HOME_ACCOUNT_FILE, json.dumps(home_account, indent=2))
+        _write_private(_owner_file(owner), current)
         try:
             _write_private(DEFAULT_CREDENTIALS, incoming)
             config['oauthAccount'] = incoming_account
@@ -138,6 +154,12 @@ def forget() -> str:
     loaded = loaded_profile()
     if loaded is not None:
         raise SwapError(f'{loaded} is loaded, so the stash holds your only login; run `cc-use default` first')
+    # A swap killed before it wrote .loaded leaves a profile in the slot and your login only in the stash.
+    if HOME_STASH_FILE.exists():
+        current = _read_secret(DEFAULT_CREDENTIALS)
+        if current is None:
+            raise SwapError('the default slot holds no login, so the stash is your only copy; not deleting it')
+        _verify_owner(current, None, doing='deleting the stash')
     HOME_STASH_FILE.unlink(missing_ok=True)
     HOME_ACCOUNT_FILE.unlink(missing_ok=True)
     return 'deleted the stashed copy of your login; your default login is untouched'
@@ -216,27 +238,44 @@ def _alive_windows(pid: int) -> bool:
         kernel32.CloseHandle(handle)
 
 
-def _verify_owner(current: str, owner: str | None) -> None:
+def _verify_owner(current: str, owner: str | None, doing: str = 'swapping') -> None:
     """Refuse when the slot's login is not the account cc-use last put there.
 
     Writing it back would otherwise hand one account's login to another's profile.
     """
-    expected = _profile_account(owner) if owner else _read_json(GLOBAL_CONFIG).get('oauthAccount', {})
+    stored = _read_secret(_owner_file(owner))
+    expected = _profile_account(owner) if owner else _home_account(stored)
     identity = _fetch_identity(_oauth(current).get('accessToken'))
     if identity is not None:
         if identity['uuid'] != expected.get('accountUuid'):
+            hint = ''
+            if owner is None and stored is not None:
+                hint = (
+                    f'. If you have since logged in as yourself again and the stash is stale, '
+                    f'delete {HOME_STASH_FILE} and {HOME_ACCOUNT_FILE} by hand'
+                )
             raise SwapError(
                 f'the default slot holds {identity["email"]}, but cc-use recorded '
-                f'{_label(owner)} ({expected.get("emailAddress")}); not swapping'
+                f'{_label(owner)} ({expected.get("emailAddress")}); not {doing}{hint}'
             )
         return
-    stored = _read_secret(_owner_file(owner))
     if stored is None or _oauth(stored).get('refreshToken') == _oauth(current).get('refreshToken'):
         return
     raise SwapError(
         'could not confirm whose login is in the default slot (offline, or its '
         'access token expired); send one message in any default session, then retry'
     )
+
+
+def _home_account(stash: str | None) -> dict:
+    """The user's own account: the stash's record once there is a stash.
+
+    ~/.claude.json is not proof, since a swap killed before .loaded may already have
+    written the loaded profile's account there.
+    """
+    if stash is not None and HOME_ACCOUNT_FILE.exists():
+        return _read_json(HOME_ACCOUNT_FILE)
+    return _read_json(GLOBAL_CONFIG).get('oauthAccount') or {}
 
 
 def _fetch_identity(access_token: str | None) -> dict | None:
@@ -246,9 +285,10 @@ def _fetch_identity(access_token: str | None) -> dict | None:
         PROFILE_URL, headers={'Authorization': f'Bearer {access_token}', 'Content-Type': 'application/json'}
     )
     try:
-        with urllib.request.urlopen(request, timeout=5) as response:
+        with urllib.request.build_opener(_RefuseRedirect).open(request, timeout=5) as response:
             body = json.loads(response.read().decode())
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
+    # OSError covers URLError, timeouts and a reset mid-read; ValueError covers bad JSON and bad UTF-8.
+    except (OSError, ValueError, http.client.HTTPException):
         return None
     account = body.get('account') if isinstance(body, dict) else None
     if not isinstance(account, dict) or not account.get('uuid'):
