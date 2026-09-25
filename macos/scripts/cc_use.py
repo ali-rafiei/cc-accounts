@@ -67,6 +67,13 @@ class SwapError(Exception):
     """A swap refused or failed before it could leave the slot half-changed."""
 
 
+class _RefuseRedirect(urllib.request.HTTPRedirectHandler):
+    """urllib would re-send the Bearer token to wherever a redirect points; a 3xx becomes an HTTPError instead."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 def main(argv: list[str]) -> int:
     if argv and argv[0] in ('-h', '--help'):
         print(USAGE)
@@ -235,7 +242,7 @@ def _fetch_identity(access_token: str | None) -> dict | None:
         PROFILE_URL, headers={'Authorization': f'Bearer {access_token}', 'Content-Type': 'application/json'}
     )
     try:
-        with urllib.request.urlopen(request, timeout=5) as response:
+        with urllib.request.build_opener(_RefuseRedirect).open(request, timeout=5) as response:
             body = json.loads(response.read().decode())
     # OSError covers URLError, timeouts and a reset mid-read; ValueError covers bad JSON and bad UTF-8.
     except (OSError, ValueError, http.client.HTTPException):

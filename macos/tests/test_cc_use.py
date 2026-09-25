@@ -1,5 +1,6 @@
 import hashlib
 import http.client
+import http.server
 import io
 import json
 import os
@@ -395,7 +396,8 @@ def _raise(exc):
 )
 def test__fetch_identity__treats_a_broken_response_as_unknown(monkeypatch, read):
     # Arrange: the request goes out, but the answer never arrives whole.
-    monkeypatch.setattr(cc_use.urllib.request, 'urlopen', lambda request, timeout: _FakeResponse(read))
+    opener = type('Opener', (), {'open': lambda self, request, timeout: _FakeResponse(read)})()
+    monkeypatch.setattr(cc_use.urllib.request, 'build_opener', lambda *handlers: opener)
 
     # Act
     identity = cc_use._fetch_identity('token')
@@ -485,3 +487,42 @@ def test__load__moves_the_incoming_login_as_it_stands_under_the_lock(machine, mo
 
     # Assert
     assert machine['keychain'][cc_use.DEFAULT_SERVICE] == rotated
+
+
+class _RedirectingProfileServer(http.server.BaseHTTPRequestHandler):
+    seen_auth = []
+
+    def do_GET(self):
+        if self.path == '/profile':
+            self.send_response(302)
+            self.send_header('Location', '/elsewhere')
+            self.end_headers()
+            return
+        _RedirectingProfileServer.seen_auth.append(self.headers.get('Authorization'))
+        body = json.dumps({'account': {'uuid': 'uuid-x', 'email': 'x@example.com'}}).encode()
+        self.send_response(200)
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+def test__fetch_identity__refuses_a_redirect_and_keeps_the_token(monkeypatch):
+    # Arrange: a local stand-in for the profile endpoint that redirects elsewhere.
+    _RedirectingProfileServer.seen_auth = []
+    server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), _RedirectingProfileServer)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    monkeypatch.setattr(cc_use, 'PROFILE_URL', f'http://127.0.0.1:{server.server_port}/profile')
+
+    # Act
+    try:
+        identity = cc_use._fetch_identity('secret-token')
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    # Assert
+    assert identity is None
+    assert _RedirectingProfileServer.seen_auth == []
