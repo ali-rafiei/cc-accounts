@@ -180,18 +180,20 @@ def forget() -> str:
     loaded = loaded_profile()
     if loaded is not None:
         raise SwapError(f'{loaded} is loaded, so the stash holds your only login; run `cc-use default` first')
+    if not HOME_STASH_FILE.exists():
+        HOME_ACCOUNT_FILE.unlink(missing_ok=True)
+        return 'nothing stashed; nothing to delete'
     # A swap killed before it wrote .loaded leaves a profile in the slot and your login only in the stash.
-    if HOME_STASH_FILE.exists():
-        current = _read_secret(DEFAULT_CREDENTIALS)
-        if current is None:
-            raise SwapError('the default slot holds no login, so the stash is your only copy; not deleting it')
-        swapped_in = _interrupted_swap_owner(current)
-        if swapped_in is not None:
-            raise SwapError(
-                f"the default slot holds {swapped_in}'s login, left by an interrupted swap, so the stash "
-                'is your only copy; run `cc-use default` to put yours back'
-            )
-        _verify_owner(current, None, doing='deleting the stash')
+    current = _read_secret(DEFAULT_CREDENTIALS)
+    if current is None:
+        raise SwapError('the default slot holds no login, so the stash is your only copy; not deleting it')
+    swapped_in = _interrupted_swap_owner(current)
+    if swapped_in is not None:
+        raise SwapError(
+            f"the default slot holds {swapped_in}'s login, left by an interrupted swap, so the stash "
+            'is your only copy; run `cc-use default` to put yours back'
+        )
+    _verify_owner(current, None, doing='deleting the stash')
     HOME_STASH_FILE.unlink(missing_ok=True)
     HOME_ACCOUNT_FILE.unlink(missing_ok=True)
     return 'deleted the stashed copy of your login; your default login is untouched'

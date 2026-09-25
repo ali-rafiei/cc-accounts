@@ -194,12 +194,14 @@ def forget() -> str:
     loaded = loaded_profile()
     if loaded is not None:
         raise SwapError(f'{loaded} is loaded, so the stash holds your only login; run `cc-use default` first')
+    if _keychain_get(HOME_STASH_SERVICE) is None:
+        HOME_ACCOUNT_FILE.unlink(missing_ok=True)
+        return 'nothing stashed; nothing to delete'
     # A swap killed before it wrote .loaded leaves a profile in the slot and your login only in the stash.
-    if _keychain_get(HOME_STASH_SERVICE) is not None:
-        current = _keychain_get(DEFAULT_SERVICE)
-        if current is None:
-            raise SwapError('the default slot holds no login, so the stash is your only copy; not deleting it')
-        _verify_owner(current, None, doing='deleting the stash')
+    current = _keychain_get(DEFAULT_SERVICE)
+    if current is None:
+        raise SwapError('the default slot holds no login, so the stash is your only copy; not deleting it')
+    _verify_owner(current, None, doing='deleting the stash')
     _keychain_delete(HOME_STASH_SERVICE)
     HOME_ACCOUNT_FILE.unlink(missing_ok=True)
     return 'deleted the stashed copy of your login; your default login is untouched'

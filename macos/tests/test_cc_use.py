@@ -862,3 +862,14 @@ def test__main__forget_exit_code_says_why_it_refused(machine, identities, code):
     # Assert
     assert rc == code
     assert machine['keychain'][cc_use.HOME_STASH_SERVICE] == HOME_SECRET
+
+
+def test__forget__says_so_when_nothing_is_stashed(machine):
+    # Arrange: a clean machine, or one where `cc-use default` already dropped the stash.
+
+    # Act
+    message = cc_use.forget()
+
+    # Assert: it must not claim to have deleted a copy that was never there.
+    assert 'deleted' not in message
+    assert 'nothing' in message
