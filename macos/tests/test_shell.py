@@ -243,6 +243,16 @@ def test__cc__refuses_the_loaded_profile_typed_in_decomposed_unicode(home):
     assert 'CONFIG=' not in out
 
 
+@pytest.mark.parametrize('name', ['status', 'forget', '-h', '--help'])
+def test__cc_add__refuses_a_name_cc_use_reads_as_a_command(home, name):
+    # Act: `cc-use status` shows the slot, so a profile by that name could never be loaded.
+    out = _zsh(f'cc-add {name}', home, check=False)
+
+    # Assert
+    assert 'CONFIG=' not in out
+    assert not (home / '.claude-profiles' / name).exists()
+
+
 def test__cc__returns_claudes_exit_status(home):
     # Arrange
     (home / '.claude-profiles' / 'work').mkdir()

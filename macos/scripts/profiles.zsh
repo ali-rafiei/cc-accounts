@@ -50,8 +50,9 @@ cc() {
 cc-add() {
   emulate -L zsh
   local base="$(_cc_base)"
-  if [[ -z "$1" || "$1" == default || "$1" == bin || "$1" == [._]* || "$1" == */* ]]; then
-    print "usage: cc-add <profile>  (not 'default' or 'bin', no /, and not starting with . or _)"
+  # status, forget and -h/--help are cc-use's own commands, so it could never load such a profile.
+  if [[ -z "$1" || "$1" == (default|bin|status|forget) || "$1" == [-._]* || "$1" == */* ]]; then
+    print "usage: cc-add <profile>  (not 'default', 'bin', 'status' or 'forget', no /, and not starting with -, . or _)"
     return 1
   fi
   mkdir -p "$base/$1" && cc-login "$1"
