@@ -98,7 +98,7 @@ def main(argv: list[str]) -> int:
 
 
 def status() -> str:
-    email = _read_json(GLOBAL_CONFIG).get('oauthAccount', {}).get('emailAddress')
+    email = (_read_json(GLOBAL_CONFIG).get('oauthAccount') or {}).get('emailAddress')
     return f'default slot: {_label(loaded_profile())} ({email})'
 
 
@@ -128,7 +128,10 @@ def load(target: str | None) -> str:
         config = _read_json(GLOBAL_CONFIG)
         # The record goes first: uninstall runs `forget` only when it exists, so no stash may outlive it.
         if owner is None:
-            _write_json(HOME_ACCOUNT_FILE, config['oauthAccount'])
+            home_account = config.get('oauthAccount')
+            if not isinstance(home_account, dict) or not home_account:
+                raise SwapError(f'{GLOBAL_CONFIG} records no oauthAccount for the default login; not swapping')
+            _write_json(HOME_ACCOUNT_FILE, home_account)
         _keychain_set(_owner_service(owner), current)
         # From here on the slot, ~/.claude.json and .loaded must change together; a
         # half-done swap would make _verify_owner refuse every later run.
@@ -217,7 +220,7 @@ def _verify_owner(current: str, owner: str | None) -> None:
 
     Writing it back would otherwise hand one account's login to another's profile.
     """
-    expected = _profile_account(owner) if owner else _read_json(GLOBAL_CONFIG).get('oauthAccount', {})
+    expected = _profile_account(owner) if owner else _read_json(GLOBAL_CONFIG).get('oauthAccount') or {}
     identity = _fetch_identity(_oauth(current).get('accessToken'))
     if identity is not None:
         if identity['uuid'] != expected.get('accountUuid'):
@@ -344,6 +347,8 @@ def _security(args: list[str], stdin: str | None = None) -> subprocess.Completed
         )
     except subprocess.TimeoutExpired as exc:
         raise SwapError(f'Keychain did not answer within {KEYCHAIN_TIMEOUT_S}s (locked?)') from exc
+    except OSError as exc:
+        raise SwapError(f'could not run {SECURITY}: {exc}') from exc
 
 
 @contextmanager

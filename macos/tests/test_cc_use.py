@@ -526,3 +526,38 @@ def test__fetch_identity__refuses_a_redirect_and_keeps_the_token(monkeypatch):
     # Assert
     assert identity is None
     assert _RedirectingProfileServer.seen_auth == []
+
+
+def test__security__reports_a_missing_binary_as_a_swap_error(tmp_path, monkeypatch):
+    # Arrange
+    monkeypatch.setattr(cc_use, 'SECURITY', str(tmp_path / 'no-such-security'))
+
+    # Act / Assert
+    with pytest.raises(cc_use.SwapError, match='no-such-security'):
+        cc_use._security(['help'])
+
+
+def test__status__treats_a_null_oauth_account_as_no_account(machine):
+    # Arrange
+    machine['global_config'].write_text(json.dumps({'oauthAccount': None}))
+
+    # Act
+    line = cc_use.status()
+
+    # Assert
+    assert line == 'default slot: default (None)'
+
+
+@pytest.mark.parametrize('online', [True, False], ids=['online', 'offline'])
+def test__load__refuses_a_default_login_with_no_oauth_account(machine, online):
+    # Arrange
+    machine['global_config'].write_text(json.dumps({'oauthAccount': None}))
+    if not online:
+        machine['identities'].clear()
+
+    # Act / Assert
+    with pytest.raises(cc_use.SwapError, match='oauthAccount|not swapping'):
+        cc_use.load('work')
+    assert machine['keychain'][cc_use.DEFAULT_SERVICE] == HOME_SECRET
+    assert cc_use.HOME_STASH_SERVICE not in machine['keychain']
+    assert not (machine['profiles'] / '.home-account.json').exists()
