@@ -563,7 +563,7 @@ def test__forget__refuses_when_the_slot_holds_another_account(machine):
     _killed_mid_swap(machine, HOME_ACCOUNT)
 
     # Act / Assert
-    with pytest.raises(cc_use.SwapError, match=r'recorded default \(me@example.com\); not deleting'):
+    with pytest.raises(cc_use.SwapError, match="holds work's login, left by an interrupted swap"):
         cc_use.forget()
     assert machine['stash'].read_text() == HOME_SECRET
     assert (machine['profiles'] / '.home-account.json').exists()
@@ -574,8 +574,8 @@ def test__forget__offline_refuses_when_the_slot_login_is_not_the_stashed_one(mac
     _killed_mid_swap(machine, HOME_ACCOUNT)
     machine['identities'].clear()
 
-    # Act / Assert
-    with pytest.raises(cc_use.SwapError, match='could not confirm'):
+    # Act / Assert: the slot's login is work's own file, so it names the interrupted swap.
+    with pytest.raises(cc_use.SwapError, match='interrupted'):
         cc_use.forget()
     assert machine['stash'].read_text() == HOME_SECRET
 
@@ -599,11 +599,12 @@ def test__load__refuses_to_overwrite_the_stash_with_a_profile_login(machine):
     (other / '.claude.json').write_text(json.dumps({'oauthAccount': {'accountUuid': 'uuid-other'}}))
     (other / '.credentials.json').write_text(json.dumps({'claudeAiOauth': {'accessToken': 'other-at'}}))
 
-    # Act / Assert: the refusal names the two files to delete if the stash really is stale.
+    # Act / Assert: the stash is the user's only copy, so the refusal points at `cc-use default`,
+    # never at deleting it.
     with pytest.raises(cc_use.SwapError, match=r'recorded default \(me@example.com\); not swapping') as refused:
         cc_use.load('other')
-    assert str(machine['stash']) in str(refused.value)
-    assert str(machine['profiles'] / '.home-account.json') in str(refused.value)
+    assert 'cc-use default' in str(refused.value)
+    assert str(machine['stash']) not in str(refused.value)
     assert machine['stash'].read_text() == HOME_SECRET
 
 
@@ -646,6 +647,89 @@ def test__load__default_refuses_a_non_object_account_record_before_writing(machi
     assert machine['default'].read_text() == WORK_SECRET
     assert json.loads(machine['global_config'].read_text())['oauthAccount'] == WORK_ACCOUNT
     assert cc_use.loaded_profile() == 'work'
+
+
+@pytest.mark.parametrize('online', [True, False], ids=['online', 'offline'])
+def test__load__default_finishes_a_swap_killed_before_it_recorded_the_profile(machine, online):
+    # Arrange: work's login is in the slot, the user's only in the stash, and no .loaded.
+    _killed_mid_swap(machine, WORK_ACCOUNT)
+    if not online:
+        machine['identities'].clear()
+
+    # Act
+    cc_use.load(None)
+
+    # Assert
+    assert machine['default'].read_text() == HOME_SECRET
+    assert json.loads(machine['global_config'].read_text())['oauthAccount'] == HOME_ACCOUNT
+    assert (machine['profiles'] / 'work' / '.credentials.json').read_text() == WORK_SECRET
+    assert not machine['stash'].exists()
+
+
+def test__load__default_leaves_a_profile_of_the_users_own_account_alone(machine):
+    # Arrange: a stash an older cc-use left, the user's login in the slot, and a profile of that
+    # same account, which must not be mistaken for a profile an interrupted swap left there.
+    machine['stash'].write_text(HOME_SECRET)
+    (machine['profiles'] / '.home-account.json').write_text(json.dumps(HOME_ACCOUNT))
+    personal = machine['profiles'] / 'personal'
+    personal.mkdir()
+    personal_secret = json.dumps({'claudeAiOauth': {'accessToken': 'personal-at', 'refreshToken': 'personal-rt'}})
+    (personal / '.claude.json').write_text(json.dumps({'oauthAccount': HOME_ACCOUNT}))
+    (personal / '.credentials.json').write_text(personal_secret)
+
+    # Act
+    message = cc_use.load(None)
+
+    # Assert
+    assert 'already' in message
+    assert (personal / '.credentials.json').read_text() == personal_secret
+    assert machine['default'].read_text() == HOME_SECRET
+
+
+def test__main__forget_exits_1_when_another_account_is_in_the_slot(machine, capsys, monkeypatch):
+    # Arrange
+    _killed_mid_swap(machine, HOME_ACCOUNT)
+
+    monkeypatch.setattr(cc_use.sys, 'platform', 'win32')  # main() refuses to run on macOS
+
+    # Act
+    code = cc_use.main(['forget'])
+
+    # Assert: uninstall stops on this, since deleting the stash would lose the user's login.
+    assert code == 1
+    assert 'cc-use default' in capsys.readouterr().err
+    assert machine['stash'].read_text() == HOME_SECRET
+
+
+def test__main__forget_exits_3_when_it_cannot_confirm_the_slot(machine, monkeypatch):
+    # Arrange: an older cc-use left a stash; the user's login has rotated since, and we are offline.
+    machine['stash'].write_text(HOME_SECRET)
+    (machine['profiles'] / '.home-account.json').write_text(json.dumps(HOME_ACCOUNT))
+    machine['default'].write_text(json.dumps({'claudeAiOauth': {'accessToken': 'x', 'refreshToken': 'home-rt-2'}}))
+    machine['identities'].clear()
+
+    monkeypatch.setattr(cc_use.sys, 'platform', 'win32')  # main() refuses to run on macOS
+
+    # Act
+    code = cc_use.main(['forget'])
+
+    # Assert: uninstall keeps going on this and keeps the harmless stash.
+    assert code == 3
+    assert machine['stash'].read_text() == HOME_SECRET
+
+
+def test__load__refusal_names_the_stash_files_when_the_slot_is_a_stranger(machine):
+    # Arrange: the user signed the default login in as an account no profile holds.
+    machine['stash'].write_text(HOME_SECRET)
+    (machine['profiles'] / '.home-account.json').write_text(json.dumps(HOME_ACCOUNT))
+    machine['default'].write_text(json.dumps({'claudeAiOauth': {'accessToken': 'stranger-at'}}))
+    machine['identities']['stranger-at'] = 'uuid-stranger'
+
+    # Act / Assert: here the stash may really be stale, so the refusal names the two files.
+    with pytest.raises(cc_use.SwapError, match='not swapping') as refused:
+        cc_use.load('work')
+    assert str(machine['stash']) in str(refused.value)
+    assert str(machine['profiles'] / '.home-account.json') in str(refused.value)
 
 
 class _RedirectingProfileServer(http.server.BaseHTTPRequestHandler):
