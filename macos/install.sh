@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install the shell side of claude-multi-account.
+# Install the shell side of cc-accounts.
 #
 #   ./install.sh               copy the scripts into $CLAUDE_PROFILES and source them from ~/.zshrc
 #   ./install.sh --skills      also link the skills into ~/.claude/skills (skip if you use the plugin)
@@ -23,7 +23,7 @@ zshrc="${ZDOTDIR:-$HOME}/.zshrc"
 skills_dir="$HOME/.claude/skills"
 scripts=(profiles.zsh cc_use.py usage_table.py bin/open)
 skills=(cc-usage cc-use cc-run)
-marker="# claude-multi-account"
+marker="# cc-accounts"
 if [[ "$dest" == "$HOME/.claude-profiles" ]]; then
   source_line="source \"\$HOME/.claude-profiles/profiles.zsh\"  $marker"
 else

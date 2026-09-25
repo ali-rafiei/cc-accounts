@@ -1,4 +1,4 @@
-# claude-multi-account
+# cc-accounts
 
 Run Claude Code as several accounts on one machine. Each account gets its own profile, one
 command shows usage across all of them, Claude can hand a task to another account, and you
@@ -33,14 +33,14 @@ installer first, then add this repository as a marketplace and install the plugi
 OS. From any shell:
 
 ```sh
-claude plugin marketplace add ali-rafiei/claude-multi-account
-claude plugin install claude-multi-account-macos@claude-multi-account     # macOS
-claude plugin install claude-multi-account-windows@claude-multi-account   # Windows
+claude plugin marketplace add ali-rafiei/cc-accounts
+claude plugin install cc-mac@cc-accounts   # macOS
+claude plugin install cc-win@cc-accounts   # Windows
 ```
 
 Run one of the two install lines, not both. Inside `claude` in a terminal, the same thing is
-`/plugin marketplace add ali-rafiei/claude-multi-account` followed by
-`/plugin install claude-multi-account-<os>@claude-multi-account`. Use a terminal for
+`/plugin marketplace add ali-rafiei/cc-accounts` followed by
+`/plugin install cc-<mac|win>@cc-accounts`. Use a terminal for
 `/plugin`: the VS Code extension's chat answers it with "/plugin isn't available in this
 environment".
 

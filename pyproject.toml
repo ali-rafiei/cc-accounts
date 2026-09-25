@@ -1,5 +1,5 @@
 [project]
-name = "claude-multi-account"
+name = "cc-accounts"
 version = "1.0.0"
 description = "Run Claude Code as several accounts on one machine, and switch which account VS Code and the claude CLI use. macOS and Windows versions."
 requires-python = ">=3.9"

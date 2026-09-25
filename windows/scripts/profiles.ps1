@@ -1,4 +1,4 @@
-# claude-multi-account for Windows: the PowerShell commands.
+# cc-accounts for Windows: the PowerShell commands.
 #
 # Works in Windows PowerShell 5.1 and PowerShell 7. Each command is a thin wrapper; the work
 # happens in the Python scripts beside this file, which Git Bash (profiles.sh) calls too.

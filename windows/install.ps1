@@ -1,5 +1,5 @@
 <#
-Install the Windows version of claude-multi-account.
+Install the Windows version of cc-accounts.
 
   .\install.ps1              copy the scripts into $env:CLAUDE_PROFILES (default ~\.claude-profiles)
                              and load the commands from your PowerShell profile and ~\.bashrc
@@ -23,7 +23,7 @@ $defaultDest = Join-Path $HOME '.claude-profiles'
 $scripts = @('profiles.ps1', 'profiles.sh', 'cc_run.py', 'cc_use.py', 'usage_table.py')
 $skillNames = @('cc-usage', 'cc-use', 'cc-run')
 $skillsDir = Join-Path $HOME '.claude\skills'
-$marker = '# claude-multi-account'
+$marker = '# cc-accounts'
 # Windows PowerShell 5.1 and PowerShell 7 each read their own profile, so both get the line.
 $documents = [Environment]::GetFolderPath('MyDocuments')
 $psProfiles = @((Join-Path $documents 'WindowsPowerShell\profile.ps1'), (Join-Path $documents 'PowerShell\profile.ps1'))
@@ -165,7 +165,7 @@ function Remove-MarkedLines([string]$path) {
     $kept = $kept.TrimEnd([char[]]"`r`n")
     if ($kept) { $kept += $(if ($text.Contains("`r`n")) { "`r`n" } else { "`n" }) }
     [System.IO.File]::WriteAllText($path, $kept, $encoding)
-    Write-Output "removed the claude-multi-account line from $path"
+    Write-Output "removed the cc-accounts line from $path"
 }
 
 # The encoding a byte-order mark names, or $null when the file has none.

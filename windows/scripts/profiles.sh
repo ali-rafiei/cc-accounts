@@ -1,4 +1,4 @@
-# claude-multi-account for Windows: the Git Bash commands.
+# cc-accounts for Windows: the Git Bash commands.
 #
 # The same commands as profiles.ps1, for Git Bash (which is also the shell Claude Code's own
 # Bash tool uses on Windows). Each is a thin wrapper around the Python scripts beside this file.

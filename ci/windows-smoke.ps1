@@ -86,7 +86,7 @@ New-Item -ItemType Directory -Force -Path (Split-Path $ps5Profile), (Split-Path 
 
 Invoke-Installer @('-Skills') | Out-Null
 foreach ($path in @($ps5Profile, $ps7Profile, $bashrc)) {
-    Assert ([IO.File]::ReadAllText($path).Contains('# claude-multi-account')) "install added the line to $path"
+    Assert ([IO.File]::ReadAllText($path).Contains('# cc-accounts')) "install added the line to $path"
 }
 foreach ($path in @($ps5Profile, $ps7Profile)) {
     Assert ([IO.File]::ReadAllText($path).Contains("caf$([char]0xE9)")) "install kept the existing text of $path"
@@ -95,7 +95,7 @@ Assert (-not ([IO.File]::ReadAllBytes($bashrc) -contains 13)) 'install writes LF
 $out = Invoke-Bash 'source ~/.bashrc'
 Assert ($out -eq '') "Git Bash sources the installed .bashrc cleanly: $out"
 Invoke-Installer @() | Out-Null
-Assert (((Get-Content $bashrc -Raw) -split '# claude-multi-account').Count -eq 2) 'a second install adds no second line'
+Assert (((Get-Content $bashrc -Raw) -split '# cc-accounts').Count -eq 2) 'a second install adds no second line'
 
 $work = Join-Path $profiles 'work'
 New-Item -ItemType Directory -Force -Path $work | Out-Null
@@ -141,13 +141,13 @@ Assert ($seen.config -eq $work) "Git Bash: a POSIX-style CLAUDE_PROFILES reaches
 Invoke-Installer @('-Uninstall') | Out-Null
 Assert (-not (Test-Path (Join-Path $profiles 'cc_use.py'))) 'uninstall removes the scripts'
 Assert (-not (Test-Path (Join-Path $profiles '.home-credentials.json'))) 'uninstall deletes the stashed login'
-Assert (-not ((Get-Content $bashrc -Raw) -match 'claude-multi-account')) 'uninstall removes the bash line'
+Assert (-not ((Get-Content $bashrc -Raw) -match 'cc-accounts')) 'uninstall removes the bash line'
 Assert ([IO.File]::ReadAllText($bashrc) -eq "export KEEP=1`n") "uninstall leaves .bashrc as it was: $([IO.File]::ReadAllText($bashrc) -replace "`r", '\r')"
 Assert ((Get-Bom $ps5Profile) -like 'FFFE*') 'uninstall keeps the UTF-16 profile UTF-16'
 Assert ((Get-Bom $ps7Profile) -eq 'EFBBBF') 'uninstall keeps the UTF-8 BOM profile BOM'
 foreach ($path in @($ps5Profile, $ps7Profile)) {
     $text = [IO.File]::ReadAllText($path)
-    Assert ($text.Contains("caf$([char]0xE9)") -and -not $text.Contains('claude-multi-account')) "uninstall removes only our line from $path"
+    Assert ($text.Contains("caf$([char]0xE9)") -and -not $text.Contains('cc-accounts')) "uninstall removes only our line from $path"
 }
 Assert (-not (Test-Path (Join-Path $HOME '.claude\skills\cc-use'))) 'uninstall removes the skill junctions'
 Assert (Test-Path (Join-Path $repo 'windows\skills\cc-use\SKILL.md')) 'removing a skill junction leaves the repo copy'
@@ -163,14 +163,14 @@ $stopped = $false
 try { Invoke-Installer @('-Uninstall') | Out-Null } catch { $stopped = $true }
 Assert $stopped 'uninstall fails when cc-use refuses because another account is in the slot'
 Assert ((Test-Path $stash) -and (Test-Path (Join-Path $profiles 'profiles.ps1'))) 'uninstall removes nothing when another account is in the slot'
-Assert ([IO.File]::ReadAllText($ps7Profile).Contains('claude-multi-account')) 'uninstall keeps the profile line when another account is in the slot'
+Assert ([IO.File]::ReadAllText($ps7Profile).Contains('cc-accounts')) 'uninstall keeps the profile line when another account is in the slot'
 
 # Uninstall goes on when cc-use only could not confirm the slot, and says how to delete the stash later.
 Set-Content (Join-Path $profiles 'cc_use.py') "import sys`nprint('cc-use: could not confirm', file=sys.stderr)`nsys.exit(3)"
 $out = Invoke-Installer @('-Uninstall')
 Assert ($out.Contains('kept') -and $out.Contains('.home-credentials.json')) "uninstall reports the kept stash and how to delete it: $out"
 Assert (Test-Path $stash) 'uninstall leaves the stash when cc-use refuses'
-Assert (-not ([IO.File]::ReadAllText($ps7Profile).Contains('claude-multi-account'))) 'uninstall still removes the line when cc-use refuses'
+Assert (-not ([IO.File]::ReadAllText($ps7Profile).Contains('cc-accounts'))) 'uninstall still removes the line when cc-use refuses'
 Remove-Item $stash
 
 # A custom profiles folder whose path has a space and an apostrophe, as under C:\Users\O'Brien.
@@ -186,7 +186,7 @@ Assert ($out.Contains('profiles: default work')) "Git Bash: the .bashrc line loa
 $env:CLAUDE_PROFILES = $custom
 Invoke-Installer @('-Uninstall') | Out-Null
 Remove-Item Env:CLAUDE_PROFILES
-Assert (-not ([IO.File]::ReadAllText($ps7Profile).Contains('claude-multi-account'))) 'uninstall from a custom folder removes the line'
+Assert (-not ([IO.File]::ReadAllText($ps7Profile).Contains('cc-accounts'))) 'uninstall from a custom folder removes the line'
 
 # A relative CLAUDE_PROFILES is anchored where the installer ran, not wherever a new shell opens.
 $installCwd = Join-Path $env:RUNNER_TEMP 'install-cwd'
@@ -200,7 +200,7 @@ Assert ($out.Contains('profiles: default work')) "Git Bash: the .bashrc line loa
 $env:CLAUDE_PROFILES = Join-Path $installCwd 'rel-profiles'
 Invoke-Installer @('-Uninstall') | Out-Null
 Remove-Item Env:CLAUDE_PROFILES
-Assert (-not ([IO.File]::ReadAllText($ps7Profile).Contains('claude-multi-account'))) 'uninstall from a relative install location removes the line'
+Assert (-not ([IO.File]::ReadAllText($ps7Profile).Contains('cc-accounts'))) 'uninstall from a relative install location removes the line'
 
 $env:CLAUDE_PROFILES = '~\tilde-profiles'
 try { Invoke-Installer @() | Out-Null } finally { Remove-Item Env:CLAUDE_PROFILES }

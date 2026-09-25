@@ -30,7 +30,7 @@ def test__install__sources_the_functions_from_zshrc_once(home):
 
     # Assert
     zshrc = (home / '.zshrc').read_text()
-    assert zshrc.count('# claude-multi-account') == 1
+    assert zshrc.count('# cc-accounts') == 1
     assert '"$HOME/.claude-profiles/profiles.zsh"' in zshrc
     assert (home / '.claude-profiles' / 'cc_use.py').is_file()
 
@@ -140,7 +140,7 @@ def test__uninstall__removes_the_scripts_and_keeps_the_profiles(home):
     _run(['bash', str(REPO / 'install.sh'), '--uninstall'], home)
 
     # Assert
-    assert '# claude-multi-account' not in (home / '.zshrc').read_text()
+    assert '# cc-accounts' not in (home / '.zshrc').read_text()
     assert not (home / '.claude-profiles' / 'profiles.zsh').exists()
     assert (home / '.claude-profiles' / 'work').is_dir()
 
@@ -159,7 +159,7 @@ def test__uninstall__keeps_a_symlinked_zshrc_a_symlink(home):
 
     # Assert
     assert (home / '.zshrc').is_symlink()
-    assert '# claude-multi-account' not in real.read_text()
+    assert '# cc-accounts' not in real.read_text()
     assert '# existing' in real.read_text()
 
 
@@ -421,7 +421,7 @@ def test__install__adds_the_line_when_zshrc_only_has_it_commented_out(tmp_path):
     _run(['bash', str(REPO / 'install.sh')], tmp_path)
 
     # Assert
-    assert '# claude-multi-account' in (tmp_path / '.zshrc').read_text()
+    assert '# cc-accounts' in (tmp_path / '.zshrc').read_text()
 
 
 def test__uninstall__keeps_going_when_forget_cannot_confirm(home):
@@ -437,7 +437,7 @@ def test__uninstall__keeps_going_when_forget_cannot_confirm(home):
     # Assert
     assert done.returncode == 0, done.stdout
     assert not (dest / 'profiles.zsh').exists()
-    assert '# claude-multi-account' not in (home / '.zshrc').read_text()
+    assert '# cc-accounts' not in (home / '.zshrc').read_text()
     assert 'security delete-generic-password' in done.stdout
 
 
@@ -453,7 +453,7 @@ def test__uninstall__stops_when_the_stash_holds_your_only_login(home):
     # Assert: nothing is removed, and the stash is not called harmless.
     assert done.returncode != 0
     assert (dest / 'profiles.zsh').exists()
-    assert '# claude-multi-account' in (home / '.zshrc').read_text()
+    assert '# cc-accounts' in (home / '.zshrc').read_text()
     assert 'delete-generic-password' not in done.stdout
 
 
@@ -503,7 +503,7 @@ def test__install__help_prints_only_the_header_comment(tmp_path):
 
     # Assert
     lines = out.splitlines()
-    assert lines[0] == 'Install the shell side of claude-multi-account.'
+    assert lines[0] == 'Install the shell side of cc-accounts.'
     assert 'set -euo pipefail' not in out
     assert lines[-1].startswith('A file already installed')
 

@@ -1,4 +1,4 @@
-# claude-multi-account for macOS
+# cc-accounts for macOS
 
 Run Claude Code as several accounts on one machine. Each account gets its own profile,
 one command shows usage across all of them, Claude can hand a task to another account, and
@@ -55,8 +55,8 @@ has loaded into your default login.
 The skills need the shell commands, so install those first:
 
 ```sh
-git clone https://github.com/ali-rafiei/claude-multi-account.git
-cd claude-multi-account/macos
+git clone https://github.com/ali-rafiei/cc-accounts.git
+cd cc-accounts/macos
 ./install.sh
 ```
 
@@ -67,16 +67,16 @@ up any file it would overwrite. Run it again after a `git pull` to update.
 Then add the skills, either as a plugin, from any shell:
 
 ```sh
-claude plugin marketplace add ali-rafiei/claude-multi-account
-claude plugin install claude-multi-account-macos@claude-multi-account
+claude plugin marketplace add ali-rafiei/cc-accounts
+claude plugin install cc-mac@cc-accounts
 ```
 
 (or the same two commands as `/plugin marketplace add ...` and `/plugin install ...` inside
 `claude` in a terminal; the VS Code extension's chat answers `/plugin` with "isn't available
 in this environment"), or by linking them from the clone with `./install.sh --skills`. Pick
-one: with both, each skill shows up twice under two names. As a plugin their full names are
-`claude-multi-account-macos:cc-usage` and so on; linked, they are plain `cc-usage`. Either way
-you can just ask in words.
+one: with both, each skill shows up twice under two names. Either way you type
+`/cc-usage`, `/cc-use` and `/cc-run` (a plugin skill also answers to its full name,
+`cc-mac:cc-usage`), or just ask in words.
 
 Install the plugin on your default login (a plain terminal, or plain `claude`), not inside a
 `cc <profile>` session: each time `cc` starts a profile it copies the default login's plugin
@@ -176,8 +176,8 @@ too, from any shell (or as `/plugin uninstall ...` and `/plugin marketplace remo
 inside `claude` in a terminal):
 
 ```sh
-claude plugin uninstall claude-multi-account-macos@claude-multi-account
-claude plugin marketplace remove claude-multi-account
+claude plugin uninstall cc-mac@cc-accounts
+claude plugin marketplace remove cc-accounts
 ```
 
 Your profiles, their logins and their history stay in `~/.claude-profiles`. Delete a

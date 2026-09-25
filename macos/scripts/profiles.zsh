@@ -1,4 +1,4 @@
-# claude-multi-account: run Claude Code as several accounts on one machine.
+# cc-accounts: run Claude Code as several accounts on one machine.
 #
 # Each extra account is a profile: a directory under $CLAUDE_PROFILES (default
 # ~/.claude-profiles) used as that account's CLAUDE_CONFIG_DIR, with its own login,

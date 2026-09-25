@@ -1,4 +1,4 @@
-# claude-multi-account for Windows
+# cc-accounts for Windows
 
 Run Claude Code as several accounts on one Windows machine. Each account gets its own
 profile, one command shows usage across all of them, Claude can hand a task to another
@@ -39,8 +39,8 @@ Skills, so you can ask Claude directly:
 ## Install
 
 ```powershell
-git clone https://github.com/ali-rafiei/claude-multi-account.git
-cd claude-multi-account\windows
+git clone https://github.com/ali-rafiei/cc-accounts.git
+cd cc-accounts\windows
 .\install.ps1
 ```
 
@@ -65,16 +65,16 @@ installer adds its line to that file as well.
 Then add the skills, either as a plugin, from PowerShell or Git Bash:
 
 ```powershell
-claude plugin marketplace add ali-rafiei/claude-multi-account
-claude plugin install claude-multi-account-windows@claude-multi-account
+claude plugin marketplace add ali-rafiei/cc-accounts
+claude plugin install cc-win@cc-accounts
 ```
 
 (or the same two commands as `/plugin marketplace add ...` and `/plugin install ...` inside
 `claude` in a terminal; the VS Code extension's chat answers `/plugin` with "isn't available
 in this environment"), or by linking them from the clone with `.\install.ps1 -Skills`. Pick
-one: with both, each skill shows up twice under two names. As a plugin their full names are
-`claude-multi-account-windows:cc-usage` and so on; linked, they are plain `cc-usage`. Either
-way you can just ask in words.
+one: with both, each skill shows up twice under two names. Either way you type
+`/cc-usage`, `/cc-use` and `/cc-run` (a plugin skill also answers to its full name,
+`cc-win:cc-usage`), or just ask in words.
 
 Install the plugin on your default login (a plain terminal, or plain `claude`), not inside a
 `cc <profile>` session: each time `cc` starts a profile it copies the default login's plugin
@@ -190,8 +190,8 @@ remove it too, from PowerShell or Git Bash (or as `/plugin uninstall ...` and
 `/plugin marketplace remove ...` inside `claude` in a terminal):
 
 ```powershell
-claude plugin uninstall claude-multi-account-windows@claude-multi-account
-claude plugin marketplace remove claude-multi-account
+claude plugin uninstall cc-win@cc-accounts
+claude plugin marketplace remove cc-accounts
 ```
 
 Your profiles, their logins and their history stay in `~\.claude-profiles`. Delete a

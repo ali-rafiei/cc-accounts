@@ -1,14 +1,14 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-marketplace-manifest.json",
-  "name": "claude-multi-account",
+  "name": "cc-accounts",
   "owner": {
     "name": "Ali Rafiei",
     "url": "https://github.com/ali-rafiei"
   },
-  "description": "claude-multi-account for macOS and for Windows: install the plugin for your OS.",
+  "description": "cc-accounts for macOS and for Windows: install the plugin for your OS.",
   "plugins": [
     {
-      "name": "claude-multi-account-macos",
+      "name": "cc-mac",
       "source": "./macos",
       "description": "macOS: per-account profiles, a usage table across all of them, one-shot prompts as another account, and swapping which account VS Code and the claude CLI use.",
       "license": "MIT",
@@ -22,7 +22,7 @@
       ]
     },
     {
-      "name": "claude-multi-account-windows",
+      "name": "cc-win",
       "source": "./windows",
       "description": "Windows (PowerShell and Git Bash): per-account profiles, a usage table across all of them, one-shot prompts as another account, and swapping which account VS Code and the claude CLI use.",
       "license": "MIT",
