@@ -16,7 +16,7 @@ Shell commands (zsh):
 |---|---|
 | `cc-add <profile>` | Create a profile and log it in |
 | `cc <profile> [args]` | Run Claude Code as that account (`cc default` runs your normal login) |
-| `cc-login <profile>` | Log a profile in again. On macOS the sign-in page opens in a fresh private window, so it can't pick up whichever account your browser is signed into |
+| `cc-login <profile>` | Log a profile in again. On macOS the sign-in page opens in a fresh private window of Google Chrome (or the browser `CC_LOGIN_BROWSER` names), so it can't pick up whichever account your browser is signed into |
 | `ccusage-all` | One table of session and weekly usage for every account, soonest reset first |
 | `cc-use <profile>` | macOS: put that account's login in the default slot, so VS Code and plain `claude` run as it. `cc-use default` puts yours back |
 
@@ -29,11 +29,11 @@ Skills, so you can ask Claude directly:
 | `cc-use` | "switch VS Code to work", "switch to whichever account has room", "put my account back" |
 
 ```text
-ACCOUNT               PROFILE           SESSION  WEEK  OTHER LIMITS  WEEK RESETS
---------------------  ----------------  -------  ----  ------------  -----------------
-work@example.com      work [default] *  12%      31%   Opus 18%      Saturday at 3am
-me@example.com        personal          0%       64%   Opus 70%      Tuesday at 1pm
-team-2@example.com    team-2            0%       2%    Opus 0%       Thursday at 7pm
+ACCOUNT             PROFILE           SESSION  WEEK  OTHER LIMITS  WEEK RESETS
+------------------  ----------------  -------  ----  ------------  ---------------
+work@example.com    work [default] *  12%      31%   Opus 18%      Saturday at 3am
+me@example.com      personal          0%       64%   Opus 70%      Tuesday at 1pm
+team-2@example.com  team-2            0%       2%    Opus 0%       Thursday at 7pm
 ```
 
 `*` marks the account the current session runs as. `[default]` marks the profile `cc-use`
@@ -90,8 +90,8 @@ cc-use default       # and back
 
 **Profiles.** A profile is a directory under `~/.claude-profiles/`, which `cc` passes to
 Claude Code as `CLAUDE_CONFIG_DIR`. Each profile gets its own login, settings, history and
-transcripts. Your default login stays where Claude Code keeps it (`~/.claude.json`) and
-never gets a `CLAUDE_CONFIG_DIR`.
+transcripts. Your default login stays where Claude Code keeps it (the Keychain and
+`~/.claude.json`) and never gets a `CLAUDE_CONFIG_DIR`.
 
 **Shared skills and plugins.** Each time `cc` starts a profile, it links `~/.claude/skills`
 and `~/.claude/plugins` into it. It also copies `enabledPlugins` and

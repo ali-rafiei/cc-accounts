@@ -11,7 +11,8 @@ python "$HOME/.claude-profiles/cc_use.py" <profile>    # load that profile's log
 python "$HOME/.claude-profiles/cc_use.py" default      # put the user's own back
 ```
 
-The same lines work from Git Bash and PowerShell; use `py -3` if `python` is missing. The
+The same lines work from Git Bash and PowerShell; use `py -3` if `python` is missing, and a
+custom `CLAUDE_PROFILES` directory in place of `~/.claude-profiles`. The
 argument is a profile directory name under `~/.claude-profiles/`, or `default`. No argument
 means status. If the script is missing, point the user at `install.ps1` in the `windows`
 folder of this plugin's repository.

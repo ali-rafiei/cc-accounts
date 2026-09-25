@@ -4,7 +4,7 @@
 [claude-swap](https://github.com/realiti4/claude-swap) by Onur Cetinkol. Both use its
 proper-lockfile-compatible lock protocol to cooperate with Claude Code's own credential and
 config locks. The macOS version also follows its Keychain I/O through `/usr/bin/security`
-(hex-encoded writes over stdin, so a secret never appears in the process list).
+(hex-encoded writes over stdin, to keep a secret out of the process list).
 claude-swap is distributed under the MIT License:
 
 ```text

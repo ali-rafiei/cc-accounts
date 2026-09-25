@@ -31,7 +31,7 @@ a shell snapshot, and keeps the guard and the skill/plugin sharing that a bare
   "Create Unsafe Agents" rule). Do not work around it: tell the user, who can approve it
   from manual mode or add a Bash allow rule for this command.
 - **`cc` refuses the profile** because `cc-use` has it in the default slot: that login is
-  the default one, so run plain `claude -p` instead.
+  the default one, so run the same command with `default` in place of the profile.
 - **Not logged in:** the user runs `cc-login <profile>` in a terminal; it needs a browser.
 
 ## What to tell the user

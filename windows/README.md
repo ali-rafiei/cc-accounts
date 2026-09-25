@@ -119,8 +119,8 @@ back to its owner. A few checks guard the swap:
   live copy of the login.
 - While a profile is loaded, `cc <that profile>` refuses to start, and `ccusage-all` reads that
   account's usage through the default login rather than its now-stale copy.
-- If antivirus or a sync tool has a file open for a moment, it retries instead of failing
-  half way.
+- If antivirus or a sync tool has a file open for a moment, it retries for about a second
+  before giving up.
 
 ## Things to know
 

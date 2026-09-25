@@ -9,11 +9,11 @@ Written for people who have more than one Claude subscription or seat (personal 
 or several team seats) and want to use whichever one has room left this week.
 
 ```text
-ACCOUNT               PROFILE           SESSION  WEEK  OTHER LIMITS  WEEK RESETS
---------------------  ----------------  -------  ----  ------------  -----------------
-work@example.com      work [default] *  12%      31%   Opus 18%      Saturday at 3am
-me@example.com        personal          0%       64%   Opus 70%      Tuesday at 1pm
-team-2@example.com    team-2            0%       2%    Opus 0%       Thursday at 7pm
+ACCOUNT             PROFILE           SESSION  WEEK  OTHER LIMITS  WEEK RESETS
+------------------  ----------------  -------  ----  ------------  ---------------
+work@example.com    work [default] *  12%      31%   Opus 18%      Saturday at 3am
+me@example.com      personal          0%       64%   Opus 70%      Tuesday at 1pm
+team-2@example.com  team-2            0%       2%    Opus 0%       Thursday at 7pm
 ```
 
 ## Pick your version
@@ -28,7 +28,8 @@ change to one never touches the other.
 
 Both give you the same commands (`cc`, `cc-add`, `cc-login`, `ccusage-all`, `cc-use`) and
 the same three skills (`cc-usage`, `cc-run`, `cc-use`). The skills also install as a Claude
-Code plugin; add this repository as a marketplace and install the plugin for your OS:
+Code plugin. They call the scripts the installer puts in `~/.claude-profiles`, so run the
+installer first, then add this repository as a marketplace and install the plugin for your OS:
 
 ```text
 /plugin marketplace add ali-rafiei/claude-multi-account

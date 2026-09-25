@@ -15,8 +15,9 @@ python "$HOME/.claude-profiles/cc_run.py" run <profile> --prompt-file <path>/pro
 
 The same line works from Git Bash and PowerShell (which has no `<` redirect, hence
 `--prompt-file`, which must come straight after the profile). Use `py -3` if `python` is
-missing. Pass `--model` only when the user names one (`opus`, `sonnet`, `haiku`). Give the
-call a long timeout (up to 600000 ms) for anything beyond a quick answer.
+missing, and a custom `CLAUDE_PROFILES` directory in place of `~/.claude-profiles`. Pass
+`--model` only when the user names one (`opus`, `sonnet`, `haiku`). Give the call a long
+timeout (up to 600000 ms) for anything beyond a quick answer.
 
 - **Skills and plugins:** `cc_run.py` gives the profile junctions to `~/.claude/skills` and
   `~/.claude/plugins`, so whatever resolves here resolves there. A plugin not installed on
