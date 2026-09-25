@@ -306,18 +306,71 @@ def test__uninstall__warns_about_a_hand_written_source_line(tmp_path):
 
 @pytest.mark.parametrize(('browser', 'flag'), [('firefox', '--private-window'), ('microsoft edge', '--inprivate')])
 def test__open__lowercase_browser_name_still_gets_its_private_flag(tmp_path, browser, flag):
-    # Arrange: a copy of the shim whose real `open` only prints its arguments.
-    fake_open = tmp_path / 'fake-open'
-    fake_open.write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n')
-    fake_open.chmod(0o755)
-    shim = tmp_path / 'open'
-    shim.write_text((REPO / 'scripts' / 'bin' / 'open').read_text().replace('/usr/bin/open', str(fake_open)))
+    # Arrange
+    shim = _open_shim(tmp_path)
 
     # Act
     out = _run(['sh', str(shim), 'https://example.com/oauth'], tmp_path, extra_env={'CC_LOGIN_BROWSER': browser})
 
     # Assert
-    assert out.stdout.splitlines() == ['-na', browser, '--args', flag, 'https://example.com/oauth']
+    args = out.stdout.splitlines()
+    assert args[:3] == ['-na', browser, '--args']
+    assert flag in args
+    assert args[-1] == 'https://example.com/oauth'
+
+
+@pytest.mark.parametrize(('browser', 'profile_flag'), [('Google Chrome', '--user-data-dir='), ('Firefox', '-profile')])
+def test__open__gives_each_login_its_own_browser_profile(tmp_path, browser, profile_flag):
+    # Arrange: private windows share one cookie jar, so only a fresh profile is a clean login.
+    shim = _open_shim(tmp_path)
+    env = {'CC_LOGIN_BROWSER': browser, 'TMPDIR': str(tmp_path)}
+
+    # Act
+    runs = [_run(['sh', str(shim), 'https://example.com/oauth'], tmp_path, extra_env=env) for _ in range(2)]
+
+    # Assert
+    profiles = [_profile_dir(run.stdout.splitlines(), profile_flag) for run in runs]
+    assert profiles[0] != profiles[1]
+    assert all(Path(profile).is_dir() for profile in profiles)
+
+
+def test__open__passes_a_non_url_through_to_the_real_open(tmp_path):
+    # Arrange
+    shim = _open_shim(tmp_path)
+
+    # Act
+    out = _run(['sh', str(shim), '-R', '/Applications'], tmp_path)
+
+    # Assert
+    assert out.stdout.splitlines() == ['-R', '/Applications']
+
+
+def test__install__quotes_a_custom_location_with_shell_metacharacters(tmp_path):
+    # Arrange
+    (tmp_path / '.claude').mkdir()
+    custom = tmp_path / 'it\'s "odd" $(touch pwned) `touch pwned2`'
+
+    # Act
+    _run(['bash', str(REPO / 'install.sh')], tmp_path, extra_env={'CLAUDE_PROFILES': str(custom)})
+    (custom / 'work').mkdir()
+    out = _zsh('cc work', tmp_path)
+
+    # Assert
+    assert out == f'CONFIG={custom}/work ARGS='
+    assert not (tmp_path / 'pwned').exists()
+    assert not (tmp_path / 'pwned2').exists()
+
+
+def test__install__adds_the_line_when_zshrc_only_has_it_commented_out(tmp_path):
+    # Arrange
+    (tmp_path / '.claude').mkdir()
+    (tmp_path / '.zshrc').write_text('# source ~/.claude-profiles/profiles.zsh\n')
+
+    # Act
+    _run(['bash', str(REPO / 'install.sh')], tmp_path)
+
+    # Assert
+    assert '# claude-multi-account' in (tmp_path / '.zshrc').read_text()
 
 
 def _zsh(command: str, home: Path, check: bool = True, extra_env: dict[str, str] | None = None) -> str:
@@ -339,3 +392,18 @@ def _run(
         assert done.returncode == 0, done.stdout + done.stderr
     done.stdout = done.stdout + done.stderr
     return done
+
+
+def _open_shim(tmp_path: Path) -> Path:
+    fake_open = tmp_path / 'fake-open'
+    fake_open.write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n')
+    fake_open.chmod(0o755)
+    shim = tmp_path / 'open'
+    shim.write_text((REPO / 'scripts' / 'bin' / 'open').read_text().replace('/usr/bin/open', str(fake_open)))
+    return shim
+
+
+def _profile_dir(args: list[str], profile_flag: str) -> str:
+    if profile_flag.endswith('='):
+        return next(arg.removeprefix(profile_flag) for arg in args if arg.startswith(profile_flag))
+    return args[args.index(profile_flag) + 1]

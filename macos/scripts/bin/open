@@ -1,7 +1,10 @@
 #!/bin/sh
 # Stand-in for /usr/bin/open, on PATH only while cc-login runs. It sends http(s) URLs to a
-# fresh private browser window so an OAuth flow never reuses whichever account the browser
-# is already signed into. CC_LOGIN_BROWSER names the app (default: Google Chrome).
+# new browser instance on a throwaway profile, in a private window, so an OAuth flow never
+# reuses whichever account the browser is already signed into. The profile is what does
+# that: private windows share one cookie jar, so a second login while the first one's window
+# is still open would sign in as the first account. CC_LOGIN_BROWSER names the app (default:
+# Google Chrome); anything but Firefox is taken to be Chromium-based.
 browser="${CC_LOGIN_BROWSER:-Google Chrome}"
 # Matched case-insensitively, as `open -a` resolves the app name.
 case "$(printf '%s' "$browser" | tr '[:upper:]' '[:lower:]')" in
@@ -12,7 +15,11 @@ esac
 for arg in "$@"; do
   case "$arg" in
     http://*|https://*)
-      exec /usr/bin/open -na "$browser" --args "$private_flag" "$arg"
+      profile_dir="$(mktemp -d)" || exit 1
+      if [ "$private_flag" = --private-window ]; then
+        exec /usr/bin/open -na "$browser" --args -profile "$profile_dir" -no-remote "$private_flag" "$arg"
+      fi
+      exec /usr/bin/open -na "$browser" --args --user-data-dir="$profile_dir" --no-first-run "$private_flag" "$arg"
       ;;
   esac
 done
