@@ -39,7 +39,8 @@ function Invoke-Shell([string]$command, [switch]$UserProfile) {
 function Invoke-Bash([string]$command, [switch]$Login) {
     # -Login starts bash the way the Git Bash shortcut does, reading ~/.bash_profile and not ~/.bashrc.
     $ErrorActionPreference = 'Continue'
-    $flags = if ($Login) { @('--login', '-c') } else { @('-c') }
+    $flags = @('-c')
+    if ($Login) { $flags = @('--login', '-c') }
     $out = & $bash @flags $command 2>&1 | Out-String
     return $out.Trim()
 }
