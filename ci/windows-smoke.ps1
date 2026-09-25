@@ -36,9 +36,11 @@ function Invoke-Shell([string]$command, [switch]$UserProfile) {
     return $out.Trim()
 }
 
-function Invoke-Bash([string]$command) {
+function Invoke-Bash([string]$command, [switch]$Login) {
+    # -Login starts bash the way the Git Bash shortcut does, reading ~/.bash_profile and not ~/.bashrc.
     $ErrorActionPreference = 'Continue'
-    $out = & $bash -c $command 2>&1 | Out-String
+    $flags = if ($Login) { @('--login', '-c') } else { @('-c') }
+    $out = & $bash @flags $command 2>&1 | Out-String
     return $out.Trim()
 }
 
@@ -188,6 +190,31 @@ $env:CLAUDE_PROFILES = Join-Path $installCwd 'rel-profiles'
 Invoke-Installer @('-Uninstall') | Out-Null
 Remove-Item Env:CLAUDE_PROFILES
 Assert (-not ([IO.File]::ReadAllText($ps7Profile).Contains('claude-multi-account'))) 'uninstall from a relative install location removes the line'
+
+$env:CLAUDE_PROFILES = '~\tilde-profiles'
+try { Invoke-Installer @() | Out-Null } finally { Remove-Item Env:CLAUDE_PROFILES }
+$out = Invoke-Bash 'source ~/.bashrc; cc'
+Assert ($out.Contains('profiles: default') -and -not $out.Contains('No such file')) "Git Bash: the .bashrc line finds a location given with a leading ~: $out"
+$env:CLAUDE_PROFILES = Join-Path $HOME 'tilde-profiles'
+Invoke-Installer @('-Uninstall') | Out-Null
+Remove-Item Env:CLAUDE_PROFILES
+
+# Git Bash starts as a login shell, which reads an existing ~/.bash_profile instead of ~/.bashrc.
+$bashProfile = Join-Path $HOME '.bash_profile'
+[IO.File]::WriteAllText($bashProfile, "export KEEP_PROFILE=1`n")
+Invoke-Installer @() | Out-Null
+$out = Invoke-Bash 'cc' -Login
+Assert ($out.Contains('profiles: default work')) "Git Bash as a login shell loads the commands past a .bash_profile that skips .bashrc: $out"
+Invoke-Installer @('-Uninstall') | Out-Null
+Assert ([IO.File]::ReadAllText($bashProfile) -eq "export KEEP_PROFILE=1`n") "uninstall leaves .bash_profile as it was: $([IO.File]::ReadAllText($bashProfile))"
+$sourcesBashrc = "test -f ~/.bashrc && . ~/.bashrc`n"
+[IO.File]::WriteAllText($bashProfile, $sourcesBashrc)
+Invoke-Installer @() | Out-Null
+Assert ([IO.File]::ReadAllText($bashProfile) -eq $sourcesBashrc) 'install leaves alone a .bash_profile that sources .bashrc'
+$out = Invoke-Bash 'cc' -Login
+Assert ($out.Contains('profiles: default work')) "Git Bash as a login shell loads the commands through .bashrc: $out"
+Invoke-Installer @('-Uninstall') | Out-Null
+Remove-Item $bashProfile
 
 # The installer runs under -ExecutionPolicy Bypass, but the policy a new shell loads the
 # profile under is the user's own.
