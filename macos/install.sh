@@ -27,7 +27,9 @@ marker="# claude-multi-account"
 if [[ "$dest" == "$HOME/.claude-profiles" ]]; then
   source_line="source \"\$HOME/.claude-profiles/profiles.zsh\"  $marker"
 else
-  source_line="export CLAUDE_PROFILES=\"$dest\"; source \"$dest/profiles.zsh\"  $marker"
+  # Single-quoted for zsh, so a ", $ or ` in the path stays text rather than running as code.
+  quoted="'$(printf '%s' "$dest" | sed "s/'/'\\\\''/g")'"
+  source_line="export CLAUDE_PROFILES=$quoted; source \"\$CLAUDE_PROFILES/profiles.zsh\"  $marker"
 fi
 
 main() {
@@ -111,7 +113,7 @@ link_skills() {
 # True when ~/.zshrc already sources profiles.zsh: our marked line, or one written by hand.
 already_sourced() {
   [[ -f "$zshrc" ]] || return 1
-  grep -qF "$marker" "$zshrc" && return 0
+  uncommented_lines | grep -qF "$marker" && return 0
   hand_written_source_lines > /dev/null
 }
 
@@ -119,11 +121,16 @@ already_sourced() {
 hand_written_source_lines() {
   [[ -f "$zshrc" ]] || return 1
   local found=1
-  grep -F "$dest/profiles.zsh" "$zshrc" && found=0
+  uncommented_lines | grep -F "$dest/profiles.zsh" && found=0
   if [[ "$dest" == "$HOME/.claude-profiles" ]]; then
-    grep -E '(\$HOME|\$\{HOME\}|~)/\.claude-profiles/profiles\.zsh' "$zshrc" && found=0
+    uncommented_lines | grep -E '(\$HOME|\$\{HOME\}|~)/\.claude-profiles/profiles\.zsh' && found=0
   fi
   return $found
+}
+
+# ~/.zshrc without its comment lines: a commented-out source line sources nothing.
+uncommented_lines() {
+  grep -v '^[[:space:]]*#' "$zshrc" || true
 }
 
 copy_with_backup() {
