@@ -192,6 +192,20 @@ def test__load__refuses_a_profile_with_a_running_session(machine):
     assert machine['keychain'][cc_use.DEFAULT_SERVICE] == HOME_SECRET
 
 
+def test__load__refuses_a_login_too_large_to_write_through_stdin_and_changes_nothing(machine):
+    # Arrange: a login past `security -i`'s line limit, as many MCP sign-ins beside it would make.
+    large = json.dumps({'claudeAiOauth': {'accessToken': 'work-at', 'refreshToken': 'work-rt'}, 'pad': 'x' * 4096})
+    machine['keychain'][cc_use._owner_service('work')] = large
+    before = dict(machine['keychain'])
+
+    # Act / Assert
+    with pytest.raises(cc_use.SwapError, match='too large'):
+        cc_use.load('work')
+    assert machine['keychain'] == before
+    assert cc_use.loaded_profile() is None
+    assert not cc_use.HOME_ACCOUNT_FILE.exists()
+
+
 def test__load__ignores_session_files_of_dead_processes(machine):
     # Arrange
     sessions = machine['profiles'] / 'work' / 'sessions'
@@ -539,6 +553,17 @@ def test__security__reports_a_missing_binary_as_a_swap_error(tmp_path, monkeypat
     # Act / Assert
     with pytest.raises(cc_use.SwapError, match='no-such-security'):
         cc_use._security(['help'])
+
+
+def test__keychain_set__never_passes_a_large_secret_as_an_argument(monkeypatch):
+    # Arrange: arguments are readable by every local user through ps.
+    calls = []
+    monkeypatch.setattr(cc_use, '_security', lambda args, stdin=None: calls.append(args))
+
+    # Act / Assert
+    with pytest.raises(cc_use.SwapError, match='too large'):
+        cc_use._keychain_set(cc_use.DEFAULT_SERVICE, 'x' * 4096)
+    assert calls == []
 
 
 def test__status__treats_a_null_oauth_account_as_no_account(machine):

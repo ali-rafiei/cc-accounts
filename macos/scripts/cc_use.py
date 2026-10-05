@@ -154,6 +154,14 @@ def load(target: str | None) -> str:
                 f'{target} is not logged in (cc-login {target})' if target else 'no stashed login to restore'
             )
         incoming_account = _profile_account(target) if target else _read_json(HOME_ACCOUNT_FILE)
+        # Every write the swap or its rollback could make, checked before the first one happens.
+        for service, secret in (
+            (_owner_service(owner), current),
+            (DEFAULT_SERVICE, incoming),
+            (_owner_service(target), incoming),
+            (DEFAULT_SERVICE, current),
+        ):
+            _keychain_set_command(service, secret)
         config = _read_json(GLOBAL_CONFIG)
         # The record goes first: uninstall runs `forget` only when it exists, so no stash may outlive it.
         if owner is None:
@@ -470,15 +478,21 @@ def _keychain_get(service: str) -> str | None:
 
 
 def _keychain_set(service: str, secret: str) -> None:
-    hex_secret = secret.encode().hex()
-    account = _keychain_account()
-    command = f'add-generic-password -U -a "{account}" -s "{service}" -X {hex_secret}\n'
-    if len(command.encode()) <= SECURITY_STDIN_LINE_LIMIT:
-        done = _security(['-i'], stdin=command)
-    else:
-        done = _security(['add-generic-password', '-U', '-a', account, '-s', service, '-X', hex_secret])
+    done = _security(['-i'], stdin=_keychain_set_command(service, secret))
     if done.returncode != 0:
         raise SwapError(f'Keychain write of {service!r} failed (rc={done.returncode}): {done.stderr.strip()}')
+
+
+def _keychain_set_command(service: str, secret: str) -> str:
+    """The `security -i` line that writes secret. Past the line limit there is no safe way to write it:
+    as an argument, the token would be readable by every local user through ps."""
+    command = f'add-generic-password -U -a "{_keychain_account()}" -s "{service}" -X {secret.encode().hex()}\n'
+    if len(command.encode()) > SECURITY_STDIN_LINE_LIMIT:
+        raise SwapError(
+            f'the login for {service!r} is too large ({len(secret.encode())} bytes) to write through '
+            "`security`'s stdin, and as an argument its token would be visible to other processes"
+        )
+    return command
 
 
 def _keychain_delete(service: str) -> None:

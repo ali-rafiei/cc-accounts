@@ -149,6 +149,9 @@ profile's own copy. A few checks guard the swap:
   `command cc` when you want the compiler by hand.
 - `cc-use` switches every session on the default login at once: all VS Code tabs and every
   plain `claude` in a terminal. Sessions started with `cc <profile>` are unaffected.
+- `cc-use` refuses to move a login larger than about 2 KB (each MCP server you sign into
+  adds to it). `security` can only take one that size as a command-line argument, where
+  every local user can read it, so the swap stops before changing anything.
 - `cc-run` hands tasks over as `claude -p --permission-mode auto`, so the other account can
   edit files and run commands without prompts, with auto mode's classifier still screening
   each action. Haiku has no auto mode, so on Haiku every edit is denied. If the session
