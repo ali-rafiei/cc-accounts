@@ -66,7 +66,7 @@ def test__discover__adds_a_default_row_for_an_account_no_profile_covers(profiles
 
 
 def test__discover__probes_the_loaded_profile_through_the_default_login(profiles):
-    # Arrange: cc-use put work's login in the default slot, so its own copy may be stale.
+    # Arrange: cc-use moved work's login into the default slot, so work holds none of its own.
     (profiles / '.loaded').write_text('work\n')
 
     # Act

@@ -48,7 +48,10 @@ On a `cc-use:` error, relay the line; it names the cause. The refusals are delib
 ## How it works (for troubleshooting)
 
 `cc_use.py` moves the `Claude Code-credentials` Keychain item and `oauthAccount` in
-`~/.claude.json`, writing the outgoing login back to its owner first. The user's own login
-waits in the `Claude Code-credentials-cc-use-home` item while another is loaded. The loaded
-profile is recorded in `~/.claude-profiles/.loaded`; while it is set, `cc <that profile>`
-refuses and the usage table reads that profile through the default login.
+`~/.claude.json`, writing the outgoing login back to its owner first and deleting the
+incoming profile's own item once its login is in the slot. The user's own login waits in the
+`Claude Code-credentials-cc-use-home` item while another is loaded. The loaded profile is
+recorded in `~/.claude-profiles/.loaded`, with a hash of its refresh token in
+`.loaded-fingerprint` for the offline ownership check; while it is set, `cc <that profile>`
+and `cc-login default` refuse, and the usage table reads that profile through the default
+login.

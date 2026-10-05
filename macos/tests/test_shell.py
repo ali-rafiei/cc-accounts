@@ -515,7 +515,7 @@ def test__uninstall__stops_when_the_stash_holds_your_only_login(home):
 
 
 def test__ccusage_all__raw_skips_the_loaded_profiles_own_copy(home):
-    # Arrange: work's login is in the default slot, so its own copy may be stale.
+    # Arrange: cc-use moved work's login into the default slot, so work holds none of its own.
     (home / '.claude-profiles' / 'work').mkdir()
     (home / '.claude-profiles' / 'personal').mkdir()
     (home / '.claude-profiles' / '.loaded').write_text('work\n')
@@ -611,6 +611,32 @@ def test__ccusage_all__raw_probes_in_a_fresh_empty_directory_it_removes_afterwar
         assert cwd != f'PWD={home}' and files == 'FILES=0'
         assert not Path(cwd.removeprefix('PWD=')).exists()
     assert f'AFTER={home}' in out.splitlines()
+
+
+@pytest.mark.parametrize('command', ['cc-login default', 'cc default auth login', 'cc default auth logout'])
+def test__cc__default_auth_refuses_while_a_profile_is_loaded(home, command):
+    # Arrange: the default slot holds work's only login.
+    (home / '.claude-profiles' / 'work').mkdir()
+    (home / '.claude-profiles' / '.loaded').write_text('work\n')
+
+    # Act
+    out = _zsh(command, home, check=False)
+
+    # Assert
+    assert 'cc-use default' in out
+    assert 'CONFIG=' not in out
+
+
+def test__cc__default_runs_other_commands_while_a_profile_is_loaded(home):
+    # Arrange
+    (home / '.claude-profiles' / 'work').mkdir()
+    (home / '.claude-profiles' / '.loaded').write_text('work\n')
+
+    # Act
+    out = _zsh('cc default auth status', home)
+
+    # Assert
+    assert out == 'CONFIG=none ARGS=auth status'
 
 
 def _zsh(command: str, home: Path, check: bool = True, extra_env: dict[str, str] | None = None) -> str:
