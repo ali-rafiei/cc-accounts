@@ -86,6 +86,11 @@ def run(profile: str, claude_args: list[str]) -> int:
             )
         share(profile_dir)
         env['CLAUDE_CONFIG_DIR'] = str(profile_dir)
+    elif claude_args[:2] in (['auth', 'login'], ['auth', 'logout']) and (loaded := loaded_profile()):
+        raise ProfileError(
+            f"{loaded} is loaded into the default login by cc-use, so this would overwrite {loaded}'s "
+            'only live login: run `cc-use default` first'
+        )
     return _launch(_claude_executable(), claude_args, env, prompt_file)
 
 

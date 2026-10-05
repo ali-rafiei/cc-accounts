@@ -106,6 +106,44 @@ def test__run__refuses_the_profile_cc_use_has_loaded(machine, capfd):
     assert capfd.readouterr().out == ''
 
 
+@pytest.mark.parametrize('action', ['login', 'logout'])
+def test__run__default_refuses_to_log_in_or_out_while_a_profile_is_loaded(machine, capfd, action):
+    # Arrange: the default slot holds work's only live login.
+    (machine['profiles'] / 'work').mkdir()
+    (machine['profiles'] / '.loaded').write_text('work\n')
+
+    # Act / Assert
+    with pytest.raises(cc_run.ProfileError, match='cc-use default'):
+        cc_run.run('default', ['auth', action])
+    assert capfd.readouterr().out == ''
+
+
+def test__main__login_default_refuses_while_a_profile_is_loaded(machine, capfd):
+    # Arrange
+    (machine['profiles'] / 'work').mkdir()
+    (machine['profiles'] / '.loaded').write_text('work\n')
+
+    # Act
+    code = cc_run.main(['login', 'default'])
+
+    # Assert
+    assert code == 1
+    assert 'cc-use default' in capfd.readouterr().err
+
+
+def test__run__default_runs_other_commands_while_a_profile_is_loaded(machine, capfd):
+    # Arrange
+    (machine['profiles'] / 'work').mkdir()
+    (machine['profiles'] / '.loaded').write_text('work\n')
+
+    # Act
+    code = cc_run.run('default', ['auth', 'status'])
+
+    # Assert
+    assert code == 0
+    assert _seen(capfd)['args'] == ['auth', 'status']
+
+
 @pytest.mark.parametrize(
     'recorded',
     [
