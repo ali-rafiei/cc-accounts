@@ -28,12 +28,17 @@ cc() {
   fi
   shift
   if [[ "$profile" == default ]]; then
+    # While cc-use has a profile loaded, the default slot holds that profile's only login.
+    local loaded="$(_cc_loaded)"
+    if [[ -n "$loaded" && "$1" == auth && "$2" == (login|logout) ]]; then
+      print "$loaded is loaded into the default login by cc-use: run \`cc-use default\` first"
+      return 1
+    fi
     # A shell started inside a profile's session inherits its CLAUDE_CONFIG_DIR.
     local CLAUDE_CONFIG_DIR; unset CLAUDE_CONFIG_DIR
     claude "$@"
   elif _cc_is_profile "$profile"; then
-    # While cc-use has this login in the default slot, the profile's own copy may be
-    # stale, and using it would strand the live one.
+    # cc-use has moved this login into the default slot, so the profile holds none of its own.
     if [[ "$(_cc_loaded)" == "$profile" ]]; then
       print "$profile is loaded into the default login by cc-use: run plain \`claude\`, or \`cc-use default\` first"
       return 1
