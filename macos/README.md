@@ -164,14 +164,15 @@ cc-use default            # if a profile is loaded; uninstall refuses otherwise
 ./install.sh --uninstall  # from the clone's macos folder
 ```
 
-That removes the scripts, the `~/.zshrc` line and any skill links from `--skills`. If
-`cc-use` still holds a copy of your login (normally it doesn't, since `cc-use default` deletes
-it), uninstall deletes it once it can confirm your own login is back in the default slot. If
-another account is in the slot, uninstall stops before removing anything, because that copy
-may be your only login: run `cc-use default` first. If it just can't check (offline), it
-keeps the copy and prints the command to delete it later. With a custom
-`CLAUDE_PROFILES`, run the uninstall from a terminal that has it set (any new terminal does,
-until the uninstall removes the line). If you installed the skills as a plugin, remove it
+That removes the scripts, the `~/.zshrc` line (backing up `~/.zshrc` first) and any skill
+links from `--skills`. If `cc-use` still holds a copy of your login (normally it doesn't,
+since `cc-use default` deletes it), uninstall deletes it once it can confirm your own login is
+back in the default slot. If another account is in the slot, uninstall stops before removing
+anything, because that copy may be your only login: run `cc-use default` first. If it just
+can't check (offline), it stops too, since the copy may still be your only login: once
+online, send one message in a plain `claude` session so the login is fresh, then rerun the
+uninstall. With a custom `CLAUDE_PROFILES`, run the uninstall from a terminal that has it set
+(any new terminal does, until the uninstall removes the line). If you installed the skills as a plugin, remove it
 too, from any shell (or as `/plugin uninstall ...` and `/plugin marketplace remove ...`
 inside `claude` in a terminal):
 

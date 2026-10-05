@@ -49,8 +49,9 @@ If PowerShell refuses to run the script, use
 execution policy would also stop your PowerShell profile from loading the commands; the
 usual fix is `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
 
-`install.ps1` copies five files into `~\.claude-profiles` (or `$env:CLAUDE_PROFILES`). It
-then adds one line to your PowerShell profiles (both Windows PowerShell's and PowerShell
+`install.ps1` copies five files into `~\.claude-profiles` (or `$env:CLAUDE_PROFILES`), and
+limits that folder, which holds every profile's login, to your account, SYSTEM and
+Administrators, so it stops inheriting whatever its parent allows. It then adds one line to your PowerShell profiles (both Windows PowerShell's and PowerShell
 7's) and to `~\.bashrc` for Git Bash, unless the line is already there. If you have a
 `~\.bash_profile` that doesn't load `~\.bashrc`, it adds the line there too. A relative or
 `~` path in `$env:CLAUDE_PROFILES` is turned into a full path first. It backs up any file it
@@ -87,6 +88,10 @@ an absolute path before running the installer; the lines it adds set that path f
 $env:CLAUDE_PROFILES = 'D:\claude-profiles'
 .\install.ps1
 ```
+
+A folder like that would otherwise take the drive root's permissions, which usually let
+other accounts on the machine read and change it; the installer limits it the same way as
+the default one, on every run.
 
 ## Quick start
 
@@ -156,8 +161,9 @@ back to its owner. A few checks guard the swap:
   as `C:/Program Files/Git/review`; write `//review` instead.
 - `cc-use` switches every session on the default login at once: all VS Code tabs and every
   plain `claude`. Sessions started with `cc <profile>` are unaffected.
-- Logins on Windows are plain JSON files in your user folder; that is how Claude Code itself
-  stores them there. The copies `cc-use` keeps sit in your user folder the same way.
+- Logins on Windows are plain JSON files; that is how Claude Code itself stores them. The
+  default one is in your user folder. Each profile's, and the copies `cc-use` keeps, are in
+  the profiles folder, which the installer limits to your account, SYSTEM and Administrators.
 - For interactive `cc <profile>` sessions in Git Bash, run Git Bash inside Windows Terminal.
   The older mintty window may not give Claude Code a proper console. PowerShell has no such
   issue.
@@ -183,7 +189,9 @@ skill links from `-Skills`. If `cc-use` still holds a copy of your login (normal
 doesn't, since `cc-use default` deletes it), uninstall deletes it once it can confirm your own
 login is back in the default slot. If another account is in the slot, uninstall stops before
 removing anything, because that copy may be your only login: run `cc-use default` first. If
-it just can't check (offline), it keeps the copy and prints the command to delete it later. With a
+it just can't check (offline), it stops too, since the copy may still be your only login: once
+online, send one message in a plain `claude` session so the login is fresh, then rerun the
+uninstall. With a
 custom `CLAUDE_PROFILES`, run the uninstall from a PowerShell window that has it set (any new
 window does, until the uninstall removes the line). If you installed the skills as a plugin,
 remove it too, from PowerShell or Git Bash (or as `/plugin uninstall ...` and

@@ -70,14 +70,12 @@ uninstall() {
     exit 1
   fi
   if [[ -f "$dest/.home-account.json" && "$(uname)" == Darwin ]]; then
-    # forget exits 3 when it could not check the slot (offline): the stash is most likely a
-    # spare copy, so keep it and carry on. Any other refusal means the stash may be your only
-    # login, and uninstalling would take away the cc-use that puts it back, so stop here.
+    # Any refusal, offline (3) included, keeps cc-use: the stash may be your only login.
     local rc=0
     python3 "$dest/cc_use.py" forget || rc=$?
     if (( rc == 3 )); then
-      echo "kept cc-use's stashed copy of your login (reason above). Once \`claude\` works as your own account, delete it:"
-      echo "  security delete-generic-password -s 'Claude Code-credentials-cc-use-home'; rm '$dest/.home-account.json'"
+      echo "not uninstalling: cc-use could not confirm whose login is in the default slot (reason above), so its stash may be your only login. Once online, send one message in a plain \`claude\` session so the login is fresh, then rerun." >&2
+      exit 1
     elif (( rc != 0 )); then
       echo "not uninstalling: cc-use's stash may hold the only copy of your login (reason above). Fix that, then rerun." >&2
       exit 1
@@ -87,12 +85,8 @@ uninstall() {
   for file in "${scripts[@]}"; do
     rm -f "$dest/$file"
   done
-  if [[ -f "$zshrc" ]] && grep -qF "$marker" "$zshrc"; then
-    # Rewrite in place rather than mv, so a symlinked ~/.zshrc stays a symlink.
-    local kept
-    kept="$(grep -vF "$marker" "$zshrc" || true)"
-    printf '%s\n' "$kept" > "$zshrc"
-    echo "removed the source line from $zshrc"
+  if [[ -f "$zshrc" ]] && grep -qaxF "$source_line" "$zshrc"; then
+    remove_source_line
   fi
   local leftover
   leftover="$(hand_written_source_lines || true)"
@@ -142,6 +136,33 @@ hand_written_source_lines() {
 # ~/.zshrc without its comment lines: a commented-out source line sources nothing.
 uncommented_lines() {
   grep -v '^[[:space:]]*#' "$zshrc" || true
+}
+
+# Removes what install added: the line and the blank line before it. Bytes, not text, so a
+# NUL or a non-UTF-8 byte elsewhere in the file survives. Copied back over the file rather
+# than moved, so a symlinked ~/.zshrc stays a symlink.
+remove_source_line() {
+  kept_zshrc="$(mktemp)"
+  trap 'rm -f "$kept_zshrc"' EXIT
+  if ! SOURCE_LINE="$source_line" python3 - "$zshrc" "$kept_zshrc" <<'PY'
+import os
+import sys
+
+source_line = os.environb[b'SOURCE_LINE']
+kept = []
+for line in open(sys.argv[1], 'rb').read().split(b'\n'):
+    if line != source_line:
+        kept.append(line)
+    elif kept and kept[-1] == b'':
+        kept.pop()
+open(sys.argv[2], 'wb').write(b'\n'.join(kept))
+PY
+  then
+    echo "could not read $zshrc, so this line is still in it: $source_line" >&2
+    exit 1
+  fi
+  copy_with_backup "$kept_zshrc" "$zshrc"
+  echo "removed the source line from $zshrc"
 }
 
 copy_with_backup() {

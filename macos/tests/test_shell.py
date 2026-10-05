@@ -145,6 +145,16 @@ def test__uninstall__removes_the_scripts_and_keeps_the_profiles(home):
     assert (home / '.claude-profiles' / 'work').is_dir()
 
 
+def test__uninstall__puts_zshrc_back_byte_for_byte(home):
+    # Arrange: the fixture installed into a ~/.zshrc that held only '# existing\n'.
+
+    # Act
+    _run(['bash', str(REPO / 'install.sh'), '--uninstall'], home)
+
+    # Assert: the blank line install put before the source line goes too.
+    assert (home / '.zshrc').read_text() == '# existing\n'
+
+
 def test__uninstall__keeps_a_symlinked_zshrc_a_symlink(home):
     # Arrange: ~/.zshrc lives in a dotfiles repo.
     dotfiles = home / 'dotfiles'
@@ -161,6 +171,46 @@ def test__uninstall__keeps_a_symlinked_zshrc_a_symlink(home):
     assert (home / '.zshrc').is_symlink()
     assert '# cc-accounts' not in real.read_text()
     assert '# existing' in real.read_text()
+
+
+def test__uninstall__keeps_a_zshrc_with_a_nul_byte_whole(home):
+    # Arrange: grep reads a file with a NUL byte as binary unless told otherwise.
+    zshrc = home / '.zshrc'
+    zshrc.write_bytes(b'export A=1\x00\n' + zshrc.read_bytes())
+
+    # Act
+    _run(['bash', str(REPO / 'install.sh'), '--uninstall'], home)
+
+    # Assert
+    kept = zshrc.read_bytes()
+    assert kept.startswith(b'export A=1\x00\n# existing\n')
+    assert b'# cc-accounts' not in kept
+
+
+def test__uninstall__keeps_a_line_of_yours_that_mentions_the_marker(home):
+    # Arrange
+    zshrc = home / '.zshrc'
+    zshrc.write_text("alias notes='echo # cc-accounts setup'\n" + zshrc.read_text())
+
+    # Act
+    _run(['bash', str(REPO / 'install.sh'), '--uninstall'], home)
+
+    # Assert
+    kept = zshrc.read_text()
+    assert "alias notes='echo # cc-accounts setup'" in kept
+    assert 'profiles.zsh' not in kept
+
+
+def test__uninstall__backs_up_zshrc_before_removing_the_line(home):
+    # Arrange
+    before = (home / '.zshrc').read_text()
+
+    # Act
+    _run(['bash', str(REPO / 'install.sh'), '--uninstall'], home)
+
+    # Assert
+    backups = list(home.glob('.zshrc.bak-*'))
+    assert [b.read_text() for b in backups] == [before]
 
 
 def test__install__custom_location_exports_it_for_the_functions(tmp_path):
@@ -424,7 +474,7 @@ def test__install__adds_the_line_when_zshrc_only_has_it_commented_out(tmp_path):
     assert '# cc-accounts' in (tmp_path / '.zshrc').read_text()
 
 
-def test__uninstall__keeps_going_when_forget_cannot_confirm(home):
+def test__uninstall__stops_when_forget_cannot_confirm(home):
     # Arrange: cc-use has a stash, and forget cannot confirm whose login is in the slot (a stub
     # stands in for cc_use.py so the real Keychain is never touched).
     dest = home / '.claude-profiles'
@@ -434,11 +484,12 @@ def test__uninstall__keeps_going_when_forget_cannot_confirm(home):
     # Act
     done = _run(['bash', str(REPO / 'install.sh'), '--uninstall'], home, check=False)
 
-    # Assert
-    assert done.returncode == 0, done.stdout
-    assert not (dest / 'profiles.zsh').exists()
-    assert '# cc-accounts' not in (home / '.zshrc').read_text()
-    assert 'security delete-generic-password' in done.stdout
+    # Assert: the stash may be your only login, so cc-use, which can put it back, stays.
+    assert done.returncode != 0
+    assert (dest / 'cc_use.py').exists()
+    assert '# cc-accounts' in (home / '.zshrc').read_text()
+    assert 'online' in done.stdout
+    assert 'delete-generic-password' not in done.stdout
 
 
 def test__uninstall__stops_when_the_stash_holds_your_only_login(home):
@@ -450,7 +501,7 @@ def test__uninstall__stops_when_the_stash_holds_your_only_login(home):
     # Act
     done = _run(['bash', str(REPO / 'install.sh'), '--uninstall'], home, check=False)
 
-    # Assert: nothing is removed, and the stash is not called harmless.
+    # Assert: nothing is removed, and no command to delete the stash is offered.
     assert done.returncode != 0
     assert (dest / 'profiles.zsh').exists()
     assert '# cc-accounts' in (home / '.zshrc').read_text()
@@ -490,11 +541,11 @@ def test__uninstall__deletes_the_stash_through_forget(home):
     (dest / 'cc_use.py').write_text('import sys\nopen(sys.argv[0] + ".args", "w").write(" ".join(sys.argv[1:]))\n')
 
     # Act
-    done = _run(['bash', str(REPO / 'install.sh'), '--uninstall'], home)
+    _run(['bash', str(REPO / 'install.sh'), '--uninstall'], home)
 
     # Assert
     assert (dest / 'cc_use.py.args').read_text() == 'forget'
-    assert 'kept' not in done.stdout
+    assert not (dest / 'cc_use.py').exists()
 
 
 def test__install__help_prints_only_the_header_comment(tmp_path):
