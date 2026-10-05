@@ -58,6 +58,13 @@ function Get-Bom([string]$path) {
     return (($bytes | Select-Object -First 3) | ForEach-Object { $_.ToString('X2') }) -join ''
 }
 
+# The SIDs a path's access rules name, inherited ones included, sorted and comma-joined.
+function Get-AccessSids([string]$path) {
+    $rules = (Get-Acl -LiteralPath $path).GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])
+    return (($rules | ForEach-Object { $_.IdentityReference.Value }) | Sort-Object -Unique) -join ','
+}
+$ownerOnly = (@([Security.Principal.WindowsIdentity]::GetCurrent().User.Value, 'S-1-5-18', 'S-1-5-32-544') | Sort-Object -Unique) -join ','
+
 # A stand-in for Claude Code that reports which config dir and arguments it was given.
 $bin = Join-Path $env:RUNNER_TEMP 'stub-bin'
 New-Item -ItemType Directory -Force -Path $bin | Out-Null
@@ -91,6 +98,8 @@ foreach ($path in @($ps5Profile, $ps7Profile, $bashrc)) {
 foreach ($path in @($ps5Profile, $ps7Profile)) {
     Assert ([IO.File]::ReadAllText($path).Contains("caf$([char]0xE9)")) "install kept the existing text of $path"
 }
+Assert ((Get-Acl -LiteralPath $profiles).AreAccessRulesProtected) 'install stops the profiles folder inheriting its parent''s permissions'
+Assert ((Get-AccessSids $profiles) -eq $ownerOnly) "install limits the profiles folder to the user, SYSTEM and Administrators: $(Get-AccessSids $profiles)"
 Assert (-not ([IO.File]::ReadAllBytes($bashrc) -contains 13)) 'install writes LF line endings into .bashrc'
 $out = Invoke-Bash 'source ~/.bashrc'
 Assert ($out -eq '') "Git Bash sources the installed .bashrc cleanly: $out"
@@ -101,6 +110,7 @@ $work = Join-Path $profiles 'work'
 New-Item -ItemType Directory -Force -Path $work | Out-Null
 Set-Content (Join-Path $work '.credentials.json') '{"claudeAiOauth": {"accessToken": "work-at", "refreshToken": "work-rt"}}'
 Set-Content (Join-Path $work '.claude.json') '{"oauthAccount": {"accountUuid": "uuid-work", "emailAddress": "work@example.com"}}'
+Assert ((Get-AccessSids (Join-Path $work '.credentials.json')) -eq $ownerOnly) "a profile's login inherits only the profiles folder's access: $(Get-AccessSids (Join-Path $work '.credentials.json'))"
 
 $seen = Invoke-Shell 'cc work -p hi' | ConvertFrom-Json
 Assert ($seen.config -eq $work) "cc work runs claude with the profile's config dir ($Shell)"
@@ -165,13 +175,15 @@ Assert $stopped 'uninstall fails when cc-use refuses because another account is 
 Assert ((Test-Path $stash) -and (Test-Path (Join-Path $profiles 'profiles.ps1'))) 'uninstall removes nothing when another account is in the slot'
 Assert ([IO.File]::ReadAllText($ps7Profile).Contains('cc-accounts')) 'uninstall keeps the profile line when another account is in the slot'
 
-# Uninstall goes on when cc-use only could not confirm the slot, and says how to delete the stash later.
+# It stops the same way when cc-use only could not confirm the slot (offline): the stash may still be the only login.
 Set-Content (Join-Path $profiles 'cc_use.py') "import sys`nprint('cc-use: could not confirm', file=sys.stderr)`nsys.exit(3)"
-$out = Invoke-Installer @('-Uninstall')
-Assert ($out.Contains('kept') -and $out.Contains('.home-credentials.json')) "uninstall reports the kept stash and how to delete it: $out"
-Assert (Test-Path $stash) 'uninstall leaves the stash when cc-use refuses'
-Assert (-not ([IO.File]::ReadAllText($ps7Profile).Contains('cc-accounts'))) 'uninstall still removes the line when cc-use refuses'
+$stopped = $false
+try { Invoke-Installer @('-Uninstall') | Out-Null } catch { $stopped = $true }
+Assert $stopped 'uninstall fails when cc-use could not confirm the slot'
+Assert ((Test-Path $stash) -and (Test-Path (Join-Path $profiles 'cc_use.py'))) 'uninstall keeps the stash and cc-use when cc-use could not confirm the slot'
+Assert ([IO.File]::ReadAllText($ps7Profile).Contains('cc-accounts')) 'uninstall keeps the profile line when cc-use could not confirm the slot'
 Remove-Item $stash
+Invoke-Installer @('-Uninstall') | Out-Null
 
 # A custom profiles folder whose path has a space and an apostrophe, as under C:\Users\O'Brien.
 $custom = Join-Path $env:RUNNER_TEMP "O'Brien profiles"
@@ -179,6 +191,7 @@ New-Item -ItemType Directory -Force -Path (Join-Path $custom 'work') | Out-Null
 $env:CLAUDE_PROFILES = $custom
 Invoke-Installer @() | Out-Null
 Remove-Item Env:CLAUDE_PROFILES
+Assert ((Get-AccessSids (Join-Path $custom 'work')) -eq $ownerOnly) "install tightens what an existing folder already holds: $(Get-AccessSids (Join-Path $custom 'work'))"
 $out = Invoke-Shell 'cc' -UserProfile
 Assert ($out.Contains('profiles: default work')) "the profile line loads a custom folder with an apostrophe ($Shell): $out"
 $out = Invoke-Bash 'source ~/.bashrc; cc'

@@ -48,7 +48,7 @@ LOCK_TIMEOUT_S = 9.0
 # makes a Windows rename fail for a moment; retry briefly before giving up.
 REPLACE_ATTEMPTS = 10
 
-# `cc-use forget` exits with this when it only could not check the slot, so uninstall can go on.
+# `cc-use forget` exits with this when it could not check the slot, as opposed to checked and wrong.
 UNCONFIRMED_EXIT = 3
 PROFILE_URL = 'https://api.anthropic.com/api/oauth/profile'
 USAGE = """usage: cc-use                 show which account is in the default slot

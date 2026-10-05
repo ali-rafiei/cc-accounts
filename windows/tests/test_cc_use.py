@@ -713,7 +713,7 @@ def test__main__forget_exits_3_when_it_cannot_confirm_the_slot(machine, monkeypa
     # Act
     code = cc_use.main(['forget'])
 
-    # Assert: uninstall keeps going on this and keeps the harmless stash.
+    # Assert: the stash may still be the user's only login, so it stays.
     assert code == 3
     assert machine['stash'].read_text() == HOME_SECRET
 
