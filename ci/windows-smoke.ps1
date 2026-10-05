@@ -139,11 +139,12 @@ Assert (-not $out.Contains('pwned') -and $out.Contains('"config":null')) "cc nev
 $out = Invoke-Shell 'ccusage-all'
 Assert ($out.Contains('me@example.com') -and $out.Contains('work@example.com') -and -not $out.Contains('Traceback')) "ccusage-all lists every account ($Shell): $out"
 
-# The access tokens are fake, so the identity check cannot resolve them and falls back to
-# comparing refresh tokens, which is the offline path.
+# The access tokens are fake, so the identity check cannot resolve them and cc-use takes its
+# offline path.
 $out = Invoke-Shell 'cc-use work'
 Assert ($out.Contains('default -> work')) "cc-use work loads the profile: $out"
 Assert ((Get-Content (Join-Path $HOME '.claude\.credentials.json') -Raw).Contains('work-rt')) 'the default slot now holds work'
+Assert (-not (Test-Path (Join-Path $work '.credentials.json'))) 'cc-use moves the login out of the profile folder'
 $out = Invoke-Shell 'cc work'
 Assert ($out.Contains('loaded into the default login')) "cc refuses the loaded profile: $out"
 $out = Invoke-Shell 'ccusage-all'
@@ -151,6 +152,7 @@ Assert ($out.Contains('work [default]') -and -not $out.Contains('Traceback')) "c
 $out = Invoke-Shell 'cc-use default'
 Assert ($out.Contains('work -> default')) "cc-use default restores the user's login: $out"
 Assert ((Get-Content (Join-Path $HOME '.claude\.credentials.json') -Raw).Contains('home-rt')) 'the default slot holds the user again'
+Assert ((Get-Content (Join-Path $work '.credentials.json') -Raw).Contains('work-rt')) 'cc-use default puts the login back in the profile folder'
 Assert (-not (Test-Path (Join-Path $profiles '.home-credentials.json'))) 'cc-use default deletes the stash once the user is back'
 
 $seen = Invoke-Bash 'source ~/.bashrc; cc work -p from-bash' | ConvertFrom-Json

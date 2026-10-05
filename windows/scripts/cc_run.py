@@ -90,6 +90,11 @@ def run(profile: str, claude_args: list[str]) -> int:
         share(profile_dir)
         env = {k: v for k, v in env.items() if k not in LOGIN_OVERRIDES}
         env['CLAUDE_CONFIG_DIR'] = str(profile_dir)
+    elif claude_args[:2] in (['auth', 'login'], ['auth', 'logout']) and (loaded := loaded_profile()):
+        raise ProfileError(
+            f"{loaded} is loaded into the default login by cc-use, so this would overwrite {loaded}'s "
+            'only live login: run `cc-use default` first'
+        )
     return _launch(claude_command(), claude_args, env, prompt_file)
 
 

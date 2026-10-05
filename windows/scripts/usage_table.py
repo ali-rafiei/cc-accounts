@@ -47,8 +47,7 @@ def _discover() -> list[tuple[str, Path | None]]:
     named: list[tuple[str, Path | None]] = []
     loaded = _loaded_profile()
     if PROFILES_DIR.is_dir():
-        # A profile cc-use has in the default slot is probed through that slot: its own
-        # Keychain copy may be stale, and refreshing it would strand the live one.
+        # A profile cc-use has in the default slot is probed through that slot, which holds its login.
         named = [(p.name, None if p.name == loaded else p) for p in sorted(PROFILES_DIR.iterdir()) if _is_profile(p)]
     default_email = _account_email(None)
     covered = default_email is not None and any(_account_email(config_dir) == default_email for _, config_dir in named)

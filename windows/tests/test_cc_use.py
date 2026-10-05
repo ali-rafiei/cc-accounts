@@ -14,6 +14,7 @@ HOME_SECRET = json.dumps({'claudeAiOauth': {'accessToken': 'home-at', 'refreshTo
 WORK_SECRET = json.dumps({'claudeAiOauth': {'accessToken': 'work-at', 'refreshToken': 'work-rt'}})
 HOME_ACCOUNT = {'accountUuid': 'uuid-home', 'emailAddress': 'me@example.com'}
 WORK_ACCOUNT = {'accountUuid': 'uuid-work', 'emailAddress': 'work@example.com'}
+OTHER_SECRET = json.dumps({'claudeAiOauth': {'accessToken': 'other-at', 'refreshToken': 'other-rt'}})
 
 
 @pytest.fixture
@@ -32,6 +33,7 @@ def machine(tmp_path, monkeypatch):
 
     monkeypatch.setattr(cc_use, 'PROFILES_DIR', profiles)
     monkeypatch.setattr(cc_use, 'LOADED_FILE', profiles / '.loaded')
+    monkeypatch.setattr(cc_use, 'LOADED_FINGERPRINT_FILE', profiles / '.loaded-fingerprint')
     monkeypatch.setattr(cc_use, 'HOME_ACCOUNT_FILE', profiles / '.home-account.json')
     monkeypatch.setattr(cc_use, 'HOME_STASH_FILE', profiles / '.home-credentials.json')
     monkeypatch.setattr(cc_use, 'GLOBAL_CONFIG', global_config)
@@ -51,6 +53,7 @@ def machine(tmp_path, monkeypatch):
         'default': default_credentials,
         'global_config': global_config,
         'stash': profiles / '.home-credentials.json',
+        'fingerprint': profiles / '.loaded-fingerprint',
         'identities': identities,
     }
 
@@ -66,6 +69,134 @@ def test__load__puts_the_profile_login_in_the_default_slot(machine):
     assert config['oauthAccount'] == WORK_ACCOUNT
     assert config['numStartups'] == 7
     assert cc_use.loaded_profile() == 'work'
+
+
+def test__load__moves_the_profile_login_out_of_its_folder(machine):
+    # Act
+    cc_use.load('work')
+
+    # Assert: a copy left behind would die the moment either one refreshes.
+    assert machine['default'].read_text() == WORK_SECRET
+    assert not (machine['profiles'] / 'work' / '.credentials.json').exists()
+
+
+def test__load__switching_moves_the_next_profile_login_out_of_its_folder(machine):
+    # Arrange
+    other = _other_profile(machine)
+    cc_use.load('work')
+
+    # Act
+    cc_use.load('other')
+
+    # Assert
+    assert machine['default'].read_text() == OTHER_SECRET
+    assert not (other / '.credentials.json').exists()
+    assert (machine['profiles'] / 'work' / '.credentials.json').read_text() == WORK_SECRET
+
+
+def test__load__records_the_profile_before_moving_its_login_out(machine, monkeypatch):
+    # Arrange: a swap killed before .loaded is recovered by matching the slot to work's own file.
+    real_write_loaded, present = cc_use._write_loaded, []
+
+    def write_loaded(profile, login):
+        present.append((machine['profiles'] / 'work' / '.credentials.json').exists())
+        real_write_loaded(profile, login)
+
+    monkeypatch.setattr(cc_use, '_write_loaded', write_loaded)
+
+    # Act
+    cc_use.load('work')
+
+    # Assert
+    assert present == [True]
+
+
+def test__load__an_interrupt_after_the_move_puts_the_profile_login_back(machine, monkeypatch):
+    # Arrange: Ctrl+C lands just after work's own file is deleted.
+    real_remove = cc_use._remove
+
+    def interrupted_after(path):
+        real_remove(path)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cc_use, '_remove', interrupted_after)
+
+    # Act
+    with pytest.raises(KeyboardInterrupt):
+        cc_use.load('work')
+
+    # Assert: the slot went back to the user's login, so work's must be in its folder again.
+    assert (machine['profiles'] / 'work' / '.credentials.json').read_text() == WORK_SECRET
+    assert machine['default'].read_text() == HOME_SECRET
+    assert cc_use.loaded_profile() is None
+
+
+def test__load__a_failed_switch_leaves_no_copy_in_the_outgoing_profile(machine, monkeypatch):
+    # Arrange: work is loaded, and the config write fails while switching to other.
+    other = _other_profile(machine)
+    cc_use.load('work')
+    real_replace, failures = cc_use._replace, []
+
+    def config_stays_locked(source, destination):
+        if destination == machine['global_config'] and not failures:
+            failures.append(destination)
+            raise cc_use.SwapError(f'{destination} stayed locked by another program; retry')
+        real_replace(source, destination)
+
+    monkeypatch.setattr(cc_use, '_replace', config_stays_locked)
+
+    # Act
+    with pytest.raises(cc_use.SwapError, match='stayed locked'):
+        cc_use.load('other')
+
+    # Assert: work's login is back in the slot only, and other's in its folder.
+    assert machine['default'].read_text() == WORK_SECRET
+    assert not (machine['profiles'] / 'work' / '.credentials.json').exists()
+    assert (other / '.credentials.json').read_text() == OTHER_SECRET
+    assert cc_use.loaded_profile() == 'work'
+    machine['identities'].clear()
+    cc_use.load(None)  # offline, work's recorded fingerprint still matches the slot
+
+
+def test__load__default_offline_accepts_the_login_it_loaded(machine):
+    # Arrange: work is loaded, so the slot holds its only copy, and its identity cannot be checked.
+    cc_use.load('work')
+    machine['identities'].clear()
+
+    # Act
+    cc_use.load(None)
+
+    # Assert
+    assert (machine['profiles'] / 'work' / '.credentials.json').read_text() == WORK_SECRET
+    assert machine['default'].read_text() == HOME_SECRET
+    assert cc_use.loaded_profile() is None
+
+
+def test__load__default_offline_refuses_a_login_that_changed_since_loading(machine):
+    # Arrange: offline, the slot's login is no longer the one cc-use loaded (rotated, or another account's).
+    cc_use.load('work')
+    changed = json.dumps({'claudeAiOauth': {'accessToken': 'x', 'refreshToken': 'changed-rt'}})
+    machine['default'].write_text(changed)
+    machine['identities'].clear()
+
+    # Act / Assert
+    with pytest.raises(cc_use.UnconfirmedOwner, match='could not confirm'):
+        cc_use.load(None)
+    assert machine['default'].read_text() == changed
+    assert not (machine['profiles'] / 'work' / '.credentials.json').exists()
+    assert cc_use.loaded_profile() == 'work'
+
+
+def test__load__keeps_a_fingerprint_of_the_loaded_login_only_while_it_is_loaded(machine):
+    # Act
+    cc_use.load('work')
+    recorded = machine['fingerprint'].read_text()
+    cc_use.load(None)
+
+    # Assert: a fingerprint, never the token itself.
+    assert recorded.strip()
+    assert 'work-rt' not in recorded
+    assert not machine['fingerprint'].exists()
 
 
 def test__load__default_writes_a_refreshed_token_back_to_its_profile(machine):
@@ -195,7 +326,7 @@ def test__load__refuses_when_the_slot_holds_an_unexpected_account(machine):
     # Act / Assert
     with pytest.raises(cc_use.SwapError, match='cc-use recorded work'):
         cc_use.load(None)
-    assert (machine['profiles'] / 'work' / '.credentials.json').read_text() == WORK_SECRET
+    assert not (machine['profiles'] / 'work' / '.credentials.json').exists()
 
 
 def test__load__reads_a_global_config_saved_with_a_bom(machine):
@@ -246,7 +377,7 @@ def test__load__an_interrupt_after_the_config_write_puts_everything_back(machine
     # Arrange: Ctrl+C lands after the slot and ~/.claude.json changed, before .loaded did.
     original_config = machine['global_config'].read_text()
 
-    def interrupted(profile):
+    def interrupted(profile, login):
         raise KeyboardInterrupt
 
     monkeypatch.setattr(cc_use, '_write_loaded', interrupted)
@@ -264,8 +395,8 @@ def test__load__an_interrupt_after_the_loaded_write_clears_it_again(machine, mon
     # Arrange: Ctrl+C lands just after .loaded names work.
     real_write_loaded = cc_use._write_loaded
 
-    def interrupted_after(profile):
-        real_write_loaded(profile)
+    def interrupted_after(profile, login):
+        real_write_loaded(profile, login)
         if profile == 'work':
             raise KeyboardInterrupt
 
@@ -277,27 +408,28 @@ def test__load__an_interrupt_after_the_loaded_write_clears_it_again(machine, mon
 
     # Assert
     assert cc_use.loaded_profile() is None
+    assert not machine['fingerprint'].exists()
     assert machine['default'].read_text() == HOME_SECRET
 
 
 def test__load__rollback_goes_on_past_a_step_that_fails(machine, monkeypatch):
     # Arrange: the .loaded write fails, and so does putting the slot's login back.
     original_config = machine['global_config'].read_text()
-    real_write = cc_use._write_private
+    real_write = cc_use._write_atomic
     slot_writes = []
 
-    def write_private(path, text):
+    def write_atomic(path, text):
         if path == machine['default']:
             slot_writes.append(text)
             if len(slot_writes) == 2:
                 raise cc_use.SwapError('slot stayed locked')
         real_write(path, text)
 
-    def loaded_fails(profile):
+    def loaded_fails(profile, login):
         if profile == 'work':
             raise OSError(28, 'No space left on device')
 
-    monkeypatch.setattr(cc_use, '_write_private', write_private)
+    monkeypatch.setattr(cc_use, '_write_atomic', write_atomic)
     monkeypatch.setattr(cc_use, '_write_loaded', loaded_fails)
 
     # Act: the original error surfaces, not the rollback's.
@@ -449,14 +581,14 @@ def test__lock_dir__gives_up_on_a_live_lock(tmp_path, monkeypatch):
 
 def test__load__writes_the_account_record_before_the_stash(machine, monkeypatch):
     # Arrange: uninstall runs `forget` off these files, so no stash may exist without its record.
-    real_write = cc_use._write_private
+    real_write = cc_use._write_atomic
 
-    def write_private(path, text):
+    def write_atomic(path, text):
         if path == machine['profiles'] / '.home-account.json':
             raise OSError(28, 'No space left on device')
         real_write(path, text)
 
-    monkeypatch.setattr(cc_use, '_write_private', write_private)
+    monkeypatch.setattr(cc_use, '_write_atomic', write_atomic)
 
     # Act
     with pytest.raises(OSError):
@@ -619,7 +751,7 @@ def test__load__a_loaded_profile_recorded_in_another_spelling_is_already_loaded(
     # Act
     message = cc_use.load('work')
 
-    # Assert: no swap of the folder with itself, which would put the stale copy in the slot.
+    # Assert: no swap of the folder with itself, and the rotated login stays in the slot.
     assert 'already' in message
     assert machine['default'].read_text() == rotated
 
@@ -763,6 +895,16 @@ def _on_lock(monkeypatch, action):
             yield
 
     monkeypatch.setattr(cc_use, '_credentials_lock', lock)
+
+
+def _other_profile(machine):
+    """A second profile, 'other', logged in as its own account."""
+    other = machine['profiles'] / 'other'
+    other.mkdir()
+    (other / '.claude.json').write_text(json.dumps({'oauthAccount': {'accountUuid': 'uuid-other'}}))
+    (other / '.credentials.json').write_text(OTHER_SECRET)
+    machine['identities']['other-at'] = 'uuid-other'
+    return other
 
 
 def _killed_mid_swap(machine, config_account):

@@ -135,17 +135,21 @@ default` works out which profile's login is in the slot and finishes putting you
 Only one live copy of a login exists at a time. Claude Code refreshes tokens as it goes, and
 a refresh can leave an older copy dead, so `cc-use` moves a login around instead of
 duplicating it: before loading the next account, it writes whatever is in the default slot
-back to its owner. A few checks guard the swap:
+back to its owner, and once the next account's login is in the slot, it deletes that
+profile's own file. A few checks guard the swap:
 
 - It takes the same lock folders Claude Code uses for token refreshes and config writes, so
   a session refreshing in the middle of a swap can't write the old account back.
 - It asks Anthropic's profile endpoint whose token is in the slot, and refuses if that isn't
   the account it last put there. If that check fails, look at what's in the slot before
-  forcing anything.
+  forcing anything. Offline it can't ask, so it compares the slot's login with a fingerprint
+  (a SHA-256 hash, not the token) of the one it loaded, kept in `.loaded-fingerprint` while
+  that profile is loaded, and refuses if they differ.
 - It refuses a profile that has a Claude Code session open, since that session holds its own
   live copy of the login.
 - While a profile is loaded, `cc <that profile>` refuses to start, and `ccusage-all` reads that
-  account's usage through the default login rather than its now-stale copy.
+  account's usage through the default login, where its login now is. `cc-login default` and
+  `cc default auth login` or `logout` refuse too, since they would overwrite that login.
 - If antivirus or a sync tool has a file open for a moment, it retries for about a second
   before giving up.
 
