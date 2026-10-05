@@ -418,8 +418,8 @@ def _profile_account(name: str) -> dict:
 def _write_loaded(profile: str | None, login: str) -> None:
     """Record the loaded profile and its login's fingerprint; .loaded never exists without one."""
     if profile is None:
-        LOADED_FINGERPRINT_FILE.unlink(missing_ok=True)
         LOADED_FILE.unlink(missing_ok=True)
+        LOADED_FINGERPRINT_FILE.unlink(missing_ok=True)
     else:
         LOADED_FINGERPRINT_FILE.write_text((_fingerprint(login) or '') + '\n')
         LOADED_FILE.write_text(profile + '\n')

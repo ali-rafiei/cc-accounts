@@ -137,8 +137,10 @@ profile's own copy. A few checks guard the swap:
   `cc default auth login` or `logout`) refuses because the default slot holds that profile's
   only login, and `ccusage-all` reads that account's usage through the default login, since
   the profile holds no login of its own.
-- If a swap is cut off part way (a closed terminal, say), `cc-use default` works out which
-  profile's login is in the slot and finishes putting yours back.
+- If a swap from your own login is cut off part way (a closed terminal, say), `cc-use
+  default` works out which profile's login is in the slot and finishes putting yours back.
+  One cut off between two profiles is not finished for you: `cc-use` refuses and names the
+  account in the slot.
 
 ## Things to know
 
@@ -151,7 +153,14 @@ profile's own copy. A few checks guard the swap:
   plain `claude` in a terminal. Sessions started with `cc <profile>` are unaffected.
 - `cc-use` refuses to move a login larger than about 2 KB (each MCP server you sign into
   adds to it). `security` can only take one that size as a command-line argument, where
-  every local user can read it, so the swap stops before changing anything.
+  every local user can read it, so the swap stops before changing anything. If the default
+  login grows past it while a profile is loaded (MCP sign-ins in VS Code, say), sign out of
+  those servers in `/mcp` before `cc-use default`.
+- While a profile is loaded, signing the default login in or out anywhere else (`/login` or
+  `/logout` in VS Code, plain `claude auth login`) replaces that profile's only login. Run
+  `cc-use default` first.
+- Profile runs (`cc <profile>`, `cc-run`) and `ccusage-all` ignore `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and
+  `CLAUDE_CODE_OAUTH_TOKEN`, so a profile always runs on its own login.
 - `cc-run` hands tasks over as `claude -p --permission-mode auto`, so the other account can
   edit files and run commands without prompts, with auto mode's classifier still screening
   each action. Haiku has no auto mode, so on Haiku every edit is denied. If the session

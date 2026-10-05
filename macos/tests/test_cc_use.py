@@ -1071,6 +1071,22 @@ def test__load__default_offline_accepts_the_login_it_fingerprinted(machine):
     assert machine['keychain'][cc_use.DEFAULT_SERVICE] == HOME_SECRET
 
 
+def test__load__default_offline_refuses_when_a_killed_swap_left_the_owner_its_login_back(machine):
+    # Arrange: work -> personal was killed after the fingerprint write, before .loaded: work's
+    # item holds work's login again, and the slot and the fingerprint are personal's.
+    cc_use.load('work')
+    personal = json.dumps({'claudeAiOauth': {'accessToken': 'personal-at', 'refreshToken': 'personal-rt'}})
+    machine['keychain'][cc_use._owner_service('work')] = WORK_SECRET
+    machine['keychain'][cc_use.DEFAULT_SERVICE] = personal
+    cc_use._write_loaded('work', personal)
+    machine['identities'].clear()
+
+    # Act / Assert: writing the slot back to work would leave work's login nowhere.
+    with pytest.raises(cc_use.UnconfirmedError):
+        cc_use.load(None)
+    assert machine['keychain'][cc_use._owner_service('work')] == WORK_SECRET
+
+
 def test__load__default_offline_refuses_a_login_that_does_not_match_the_fingerprint(machine):
     # Arrange
     cc_use.load('work')

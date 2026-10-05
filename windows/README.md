@@ -129,8 +129,10 @@ profile. VS Code and plain `claude` use the default one, plus the account detail
 `~\.claude.json`. `cc-use work` swaps in work's login and account details. New sessions
 start on it straight away, and running ones pick it up on their next message. Your own login
 waits in `~\.claude-profiles\.home-credentials.json` until `cc-use default` puts it back and
-deletes that spare copy. If a swap is cut off part way (a closed window, say), `cc-use
-default` works out which profile's login is in the slot and finishes putting yours back.
+deletes that spare copy. If a swap from your own login is cut off part way (a closed
+window, say), `cc-use default` works out which profile's login is in the slot and finishes
+putting yours back. One cut off between two profiles is not finished for you: `cc-use`
+refuses and names the account in the slot.
 
 Only one live copy of a login exists at a time. Claude Code refreshes tokens as it goes, and
 a refresh can leave an older copy dead, so `cc-use` moves a login around instead of
@@ -165,6 +167,14 @@ profile's own file. A few checks guard the swap:
   as `C:/Program Files/Git/review`; write `//review` instead.
 - `cc-use` switches every session on the default login at once: all VS Code tabs and every
   plain `claude`. Sessions started with `cc <profile>` are unaffected.
+- While a profile is loaded, signing the default login in or out anywhere else (`/login` or
+  `/logout` in VS Code, plain `claude auth login`) replaces that profile's only login. Run
+  `cc-use default` first.
+- Profile runs (`cc <profile>`, `cc-run`) and `ccusage-all` ignore `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and
+  `CLAUDE_CODE_OAUTH_TOKEN`, so a profile always runs on its own login.
+- `cc` and `ccusage-all` find `claude` on PATH only, never in the current folder, and run an
+  npm `claude.cmd` through the program it points to rather than cmd.exe. A `claude.cmd` that
+  isn't an npm shim is refused.
 - Logins on Windows are plain JSON files; that is how Claude Code itself stores them. The
   default one is in your user folder. Each profile's, and the copies `cc-use` keeps, are in
   the profiles folder, which the installer limits to your account, SYSTEM and Administrators.

@@ -352,8 +352,13 @@ def _verify_owner(current: str, owner: str | None, doing: str = 'swapping') -> N
             raise SwapError(message)
         return
     if owner is not None:
-        fingerprint = _fingerprint(current)
-        if fingerprint is not None and fingerprint == _loaded_fingerprint():
+        # A loaded profile has no item of its own, unless a killed swap wrote the slot back to it
+        # first; then that item, not the fingerprint, says what the owner's login is.
+        held = _keychain_get(_owner_service(owner))
+        if held is not None:
+            if _oauth(held).get('refreshToken') == _oauth(current).get('refreshToken'):
+                return
+        elif (fingerprint := _fingerprint(current)) is not None and fingerprint == _loaded_fingerprint():
             return
     elif stored is None or _oauth(stored).get('refreshToken') == _oauth(current).get('refreshToken'):
         return
