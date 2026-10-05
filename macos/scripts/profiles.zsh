@@ -39,6 +39,8 @@ cc() {
       return 1
     fi
     _cc_share "$base/$profile"
+    local ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN
+    unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN  # each overrides the profile's login
     CLAUDE_CONFIG_DIR="$base/$profile" claude "$@"
   else
     print "no such profile: $profile (create it with: cc-add $profile)"
@@ -84,15 +86,14 @@ ccusage-all() {
     python3 "$base/usage_table.py"
     return
   fi
-  local loaded="$(_cc_loaded)" profile CLAUDE_CONFIG_DIR
-  unset CLAUDE_CONFIG_DIR  # inherited inside a profile's session; the default takes none
+  local loaded="$(_cc_loaded)" profile
   print -P "%B=== default ===%b"
-  claude -p "/usage" < /dev/null 2>&1
+  _cc_usage_probe
   print
   for profile in ${(f)"$(_cc_profiles)"}; do
     [[ "$profile" == "$loaded" ]] && continue  # cc-use put it in the default slot, printed above
     print -P "%B=== $profile ===%b"
-    CLAUDE_CONFIG_DIR="$base/$profile" claude -p "/usage" < /dev/null 2>&1
+    _cc_usage_probe "$base/$profile"
     print
   done
 }
@@ -123,6 +124,18 @@ _cc_loaded() {
   emulate -L zsh
   local file="$(_cc_base)/.loaded"
   [[ -f "$file" ]] && print -r -- "$(<"$file")"
+}
+
+# `claude -p /usage` on an account's own login (no config dir = the default), in a fresh empty
+# directory: -p skips the trust prompt, so the current directory's settings and hooks would load.
+_cc_usage_probe() {
+  emulate -L zsh
+  local dir CLAUDE_CONFIG_DIR ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN
+  unset CLAUDE_CONFIG_DIR ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN
+  [[ -n "$1" ]] && export CLAUDE_CONFIG_DIR="$1"
+  dir="$(mktemp -d)" || return
+  (cd -q -- "$dir" && claude -p "/usage" < /dev/null 2>&1)
+  rm -rf -- "$dir"
 }
 
 # Link your skills and plugins into a profile. A real directory already there is left alone.

@@ -13,13 +13,13 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import subprocess
+import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from cc_run import is_existing_profile_name
+from cc_run import LOGIN_OVERRIDES, ProfileError, claude_command, is_existing_profile_name
 
 PROFILES_DIR = Path(os.environ.get('CLAUDE_PROFILES') or Path.home() / '.claude-profiles').expanduser()
 MAX_PARALLEL = 6
@@ -201,24 +201,26 @@ def _error_line(out: str) -> str:
 
 
 def _claude(args: list[str], config_dir: Path | None) -> str:
-    env = dict(os.environ)
-    env.pop('CLAUDE_CONFIG_DIR', None)
+    env = {k: v for k, v in os.environ.items() if k != 'CLAUDE_CONFIG_DIR' and k not in LOGIN_OVERRIDES}
     if config_dir:
         env['CLAUDE_CONFIG_DIR'] = str(config_dir)
-    # shutil.which honours PATHEXT, so it finds claude.exe or an npm-installed claude.cmd.
-    claude = shutil.which('claude')
-    if claude is None:
-        return 'error: claude is not on PATH'
     try:
-        done = subprocess.run(
-            [claude, *args],
-            capture_output=True,
-            encoding='utf-8',
-            errors='replace',
-            env=env,
-            stdin=subprocess.DEVNULL,
-            timeout=120,
-        )
+        claude = claude_command()
+    except ProfileError as exc:
+        return f'error: {exc}'
+    try:
+        # An empty directory, so no project's settings or hooks load: -p skips the trust prompt.
+        with tempfile.TemporaryDirectory() as cwd:
+            done = subprocess.run(
+                [*claude, *args],
+                capture_output=True,
+                cwd=cwd,
+                encoding='utf-8',
+                errors='replace',
+                env=env,
+                stdin=subprocess.DEVNULL,
+                timeout=120,
+            )
         return done.stdout + done.stderr
     except (subprocess.TimeoutExpired, OSError) as exc:
         return f'error: {exc}'

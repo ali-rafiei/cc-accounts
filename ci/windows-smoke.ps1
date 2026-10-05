@@ -65,16 +65,15 @@ function Get-AccessSids([string]$path) {
 }
 $ownerOnly = (@([Security.Principal.WindowsIdentity]::GetCurrent().User.Value, 'S-1-5-18', 'S-1-5-32-544') | Sort-Object -Unique) -join ','
 
-# A stand-in for Claude Code that reports which config dir and arguments it was given.
+# A stand-in for Claude Code that reports which config dir and arguments it was given. It is
+# an npm shim, as npm installs Claude Code, so cc runs its script with node, not through cmd.exe.
 $bin = Join-Path $env:RUNNER_TEMP 'stub-bin'
 New-Item -ItemType Directory -Force -Path $bin | Out-Null
-Set-Content -Path (Join-Path $bin 'claude_stub.py') -Value @'
-import json, os, sys
-print(json.dumps({'config': os.environ.get('CLAUDE_CONFIG_DIR'), 'args': sys.argv[1:]}))
-sys.exit(int(os.environ.get('STUB_EXIT', '0')))
+Set-Content -Path (Join-Path $bin 'claude_stub.js') -Value @'
+console.log(JSON.stringify({config: process.env.CLAUDE_CONFIG_DIR || null, args: process.argv.slice(2)}));
+process.exitCode = Number(process.env.STUB_EXIT || '0');
 '@
-$python = (Get-Command python).Source
-Set-Content -Path (Join-Path $bin 'claude.cmd') -Value "@`"$python`" `"%~dp0claude_stub.py`" %*"
+Set-Content -Path (Join-Path $bin 'claude.cmd') -Value '@"%~dp0\claude_stub.js" %*'
 $env:PATH = "$bin;$env:PATH"
 
 # A default login and one logged-in profile, as files, the way Claude Code stores them on Windows.
@@ -123,8 +122,19 @@ Assert ($seen.args.Count -eq 3 -and $seen.args[1] -eq 'say "hi there"' -and $see
 $out = Invoke-Shell "`$env:STUB_EXIT = '7'; cc work | Out-Null; `"exit=`$LASTEXITCODE`""
 Assert ($out -eq 'exit=7') "cc returns claude's exit code ($Shell): $out"
 
+$seen = Invoke-Shell "cc work -p 'a`" & echo pwned & `"b' '%PATH%'" | ConvertFrom-Json
+Assert ($seen.args.Count -eq 3 -and $seen.args[1] -eq 'a" & echo pwned & "b' -and $seen.args[2] -eq '%PATH%') "cc passes cmd.exe syntax to claude as text ($Shell): $($seen.args -join '|')"
+
 $seen = Invoke-Shell 'cc default --version' | ConvertFrom-Json
 Assert ($null -eq $seen.config) "cc default runs with no config dir ($Shell)"
+
+# A cloned repo that ships its own claude.bat; Windows would otherwise run it before PATH.
+$untrusted = Join-Path $env:RUNNER_TEMP 'untrusted-repo'
+New-Item -ItemType Directory -Force -Path $untrusted | Out-Null
+Set-Content -Path (Join-Path $untrusted 'claude.bat') -Value '@echo pwned'
+Push-Location $untrusted
+try { $out = Invoke-Shell 'cc default --version' } finally { Pop-Location }
+Assert (-not $out.Contains('pwned') -and $out.Contains('"config":null')) "cc never runs a claude.bat from the current folder ($Shell): $out"
 
 $out = Invoke-Shell 'ccusage-all'
 Assert ($out.Contains('me@example.com') -and $out.Contains('work@example.com') -and -not $out.Contains('Traceback')) "ccusage-all lists every account ($Shell): $out"

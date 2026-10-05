@@ -14,6 +14,7 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -21,6 +22,8 @@ from pathlib import Path
 PROFILES_DIR = Path(os.environ.get('CLAUDE_PROFILES') or Path.home() / '.claude-profiles').expanduser()
 RESERVED_NAMES = {'bin', 'default'}  # never account profiles; neither is anything starting with . or _
 MAX_PARALLEL = 6
+# Each makes Claude Code use that credential instead of the account's own login.
+LOGIN_OVERRIDES = ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN')
 SESSION = re.compile(r'Current session:\s*(\d+)%')
 WEEK_ALL = re.compile(r'Current week \(all models\):\s*(\d+)%')
 WEEK_OTHER = re.compile(r'Current week \((?!all models)([^)]+)\):\s*(\d+)%')
@@ -187,20 +190,22 @@ def _error_line(out: str) -> str:
 
 
 def _claude(args: list[str], config_dir: Path | None) -> str:
-    env = dict(os.environ)
-    env.pop('CLAUDE_CONFIG_DIR', None)
+    env = {k: v for k, v in os.environ.items() if k != 'CLAUDE_CONFIG_DIR' and k not in LOGIN_OVERRIDES}
     if config_dir:
         env['CLAUDE_CONFIG_DIR'] = str(config_dir)
     try:
-        done = subprocess.run(
-            ['claude', *args],
-            capture_output=True,
-            encoding='utf-8',
-            errors='replace',
-            env=env,
-            stdin=subprocess.DEVNULL,
-            timeout=120,
-        )
+        # An empty directory, so no project's settings or hooks load: -p skips the trust prompt.
+        with tempfile.TemporaryDirectory() as cwd:
+            done = subprocess.run(
+                ['claude', *args],
+                capture_output=True,
+                cwd=cwd,
+                encoding='utf-8',
+                errors='replace',
+                env=env,
+                stdin=subprocess.DEVNULL,
+                timeout=120,
+            )
         return done.stdout + done.stderr
     except (subprocess.TimeoutExpired, OSError) as exc:
         return f'error: {exc}'
