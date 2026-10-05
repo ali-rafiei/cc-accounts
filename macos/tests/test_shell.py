@@ -11,6 +11,12 @@ pytestmark = pytest.mark.skipif(shutil.which('zsh') is None, reason='the cc func
 
 # Stands in for the real CLI so the tests see which config dir `cc` hands it.
 CLAUDE_STUB = 'claude() { print -r -- "CONFIG=${CLAUDE_CONFIG_DIR:-none} ARGS=$*"; }'
+# Reports what a child process of claude would see: its config dir and any login overrides.
+ENV_STUB = (
+    'claude() { print -r -- "CONFIG=$(printenv CLAUDE_CONFIG_DIR) LOGIN=$(env | grep -E '
+    "'^(ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|CLAUDE_CODE_OAUTH_TOKEN)=' | cut -d= -f1 | sort | tr '\\n' ' ')\"; }"
+)
+LOGIN_OVERRIDES = {'ANTHROPIC_API_KEY': 'sk-ant', 'ANTHROPIC_AUTH_TOKEN': 'bearer', 'CLAUDE_CODE_OAUTH_TOKEN': 'oauth'}
 
 
 @pytest.fixture
@@ -506,6 +512,54 @@ def test__install__help_prints_only_the_header_comment(tmp_path):
     assert lines[0] == 'Install the shell side of cc-accounts.'
     assert 'set -euo pipefail' not in out
     assert lines[-1].startswith('A file already installed')
+
+
+def test__cc__drops_login_overrides_for_a_named_profile(home):
+    # Arrange: any of these would run the profile on that credential instead of its own login.
+    (home / '.claude-profiles' / 'work').mkdir()
+
+    # Act
+    out = _zsh(f'{ENV_STUB}; cc work', home, extra_env=LOGIN_OVERRIDES)
+
+    # Assert
+    assert out == f'CONFIG={home}/.claude-profiles/work LOGIN='
+
+
+def test__cc__default_keeps_login_overrides(home):
+    # Act
+    out = _zsh(f'{ENV_STUB}; cc default', home, extra_env=LOGIN_OVERRIDES)
+
+    # Assert
+    assert out == 'CONFIG= LOGIN=ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN'
+
+
+def test__ccusage_all__raw_probes_without_login_overrides(home):
+    # Arrange
+    (home / '.claude-profiles' / 'work').mkdir()
+
+    # Act
+    out = _zsh(f'{ENV_STUB}; ccusage-all --raw', home, extra_env=LOGIN_OVERRIDES)
+
+    # Assert
+    assert 'CONFIG= LOGIN=' in out.splitlines()
+    assert f'CONFIG={home}/.claude-profiles/work LOGIN=' in out.splitlines()
+
+
+def test__ccusage_all__raw_probes_in_a_fresh_empty_directory_it_removes_afterwards(home):
+    # Arrange: -p skips the trust prompt, so this directory's .claude/settings.json hooks would run.
+    (home / '.claude-profiles' / 'work').mkdir()
+    stub = 'claude() { print -r -- "PWD=$PWD FILES=$(ls -A | wc -l | tr -d \' \')"; }'
+
+    # Act
+    out = _zsh(f'{stub}; ccusage-all --raw; print -r -- "AFTER=$PWD"', home)
+
+    # Assert
+    probes = [line.split() for line in out.splitlines() if line.startswith('PWD=')]
+    assert len(probes) == 2
+    for cwd, files in probes:
+        assert cwd != f'PWD={home}' and files == 'FILES=0'
+        assert not Path(cwd.removeprefix('PWD=')).exists()
+    assert f'AFTER={home}' in out.splitlines()
 
 
 def _zsh(command: str, home: Path, check: bool = True, extra_env: dict[str, str] | None = None) -> str:

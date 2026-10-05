@@ -13,7 +13,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import signal
 import subprocess
 import sys
@@ -31,6 +30,10 @@ SHARED_DIRS = ('skills', 'plugins')
 # with embedded double quotes and drops an empty one when it starts a native program.
 ARGV_ENV = 'CC_RUN_ARGV'
 MIRRORED_SETTINGS = ('enabledPlugins', 'extraKnownMarketplaces')
+# Each makes Claude Code use that credential instead of the profile's own login.
+LOGIN_OVERRIDES = ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN')
+# The target of an npm cmd-shim: "%dp0%\<path>" %* (npm 7+) or "%~dp0\<path>" %* (npm 6).
+NPM_SHIM_TARGET = re.compile(r'"%~?dp0%?\\([^"%]+)"\s+%\*')
 LOGIN_HINT = (
     'Sign in with the account this profile is for. If your browser is already signed into a '
     'different Claude account, copy the sign-in link Claude shows into a private window instead.'
@@ -85,8 +88,9 @@ def run(profile: str, claude_args: list[str]) -> int:
                 f'{profile} is loaded into the default login by cc-use: run `cc default`, or `cc-use default` first'
             )
         share(profile_dir)
+        env = {k: v for k, v in env.items() if k not in LOGIN_OVERRIDES}
         env['CLAUDE_CONFIG_DIR'] = str(profile_dir)
-    return _launch(_claude_executable(), claude_args, env, prompt_file)
+    return _launch(claude_command(), claude_args, env, prompt_file)
 
 
 def add(profile: str) -> int:
@@ -143,6 +147,19 @@ def require_profile(name: str) -> Path:
     return path
 
 
+def claude_command() -> list[str]:
+    """The command that starts Claude Code, from absolute PATH entries only, never the current directory.
+
+    An npm claude.cmd is not run itself: cmd.exe would read & and % in the arguments as syntax.
+    """
+    claude = _find_on_path('claude')
+    if claude is None:
+        raise ProfileError('claude is not on PATH; install Claude Code first')
+    if claude.suffix.lower() in ('.cmd', '.bat'):
+        return _shim_command(claude)
+    return [str(claude)]
+
+
 def loaded_profile() -> str | None:
     try:
         return LOADED_FILE.read_text().strip() or None
@@ -181,22 +198,52 @@ def _link_dir(link: Path, target: Path) -> None:
         raise ProfileError(f'could not link {link} to {target}: {exc}') from exc
 
 
-def _claude_executable() -> str:
-    # shutil.which honours PATHEXT, so it finds claude.exe or an npm-installed claude.cmd.
-    found = shutil.which('claude')
-    if found is None:
-        raise ProfileError('claude is not on PATH; install Claude Code first')
-    return found
+def _find_on_path(name: str) -> Path | None:
+    """Like shutil.which, minus the current directory it searches first on Windows."""
+    if sys.platform == 'win32':
+        extensions = [e.lower() for e in os.environ.get('PATHEXT', '.COM;.EXE;.BAT;.CMD').split(';') if e]
+        has_extension = any(name.lower().endswith(e) for e in extensions)
+        names = [name] if has_extension else [name + e for e in extensions]
+    else:
+        names = [name]
+    for entry in os.environ.get('PATH', '').split(os.pathsep):
+        if not os.path.isabs(entry):
+            continue
+        for candidate in (Path(entry) / n for n in names):
+            if candidate.is_file() and (sys.platform == 'win32' or os.access(candidate, os.X_OK)):
+                return candidate
+    return None
 
 
-def _launch(claude: str, args: list[str], env: dict[str, str], prompt_file: Path | None) -> int:
+def _shim_command(shim: Path) -> list[str]:
+    """What an npm cmd-shim would run: its .exe target, or node.exe with its script."""
+    try:
+        match = NPM_SHIM_TARGET.search(shim.read_text(encoding='utf-8', errors='replace'))
+    except OSError as exc:
+        raise ProfileError(f'could not read {shim}: {exc}') from exc
+    target = shim.parent.joinpath(*match.group(1).split('\\')) if match else None
+    if target is None or not target.is_file():
+        raise ProfileError(f'{shim} is not an npm shim with a target that exists; reinstall Claude Code')
+    if target.suffix.lower() == '.exe':
+        return [str(target)]
+    if target.suffix.lower() not in ('.js', '.cjs', '.mjs'):
+        raise ProfileError(f'{shim} runs {target}, which is neither an .exe nor a Node.js script')
+    node = shim.parent / 'node.exe'
+    if not node.is_file():
+        node = _find_on_path('node.exe')
+    if node is None:
+        raise ProfileError(f'{shim} runs a Node.js script, but node.exe is not on PATH')
+    return [str(node), str(target)]
+
+
+def _launch(claude: list[str], args: list[str], env: dict[str, str], prompt_file: Path | None) -> int:
     # Ctrl+C belongs to claude, which shares this console; this process only waits for it.
     previous = signal.signal(signal.SIGINT, signal.SIG_IGN)
     try:
         if prompt_file is None:
-            return subprocess.run([claude, *args], env=env).returncode
+            return subprocess.run([*claude, *args], env=env).returncode
         with prompt_file.open('rb') as stdin:
-            return subprocess.run([claude, *args], env=env, stdin=stdin).returncode
+            return subprocess.run([*claude, *args], env=env, stdin=stdin).returncode
     finally:
         signal.signal(signal.SIGINT, previous)
 

@@ -1,9 +1,18 @@
 import json
+import sys
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import pytest
 
+import cc_run
 import usage_table
+
+# Reports where it ran, what was there, and which login overrides reached it.
+PROBE_STUB = f"""import json, os
+login_env = sorted(k for k in os.environ if k in {cc_run.LOGIN_OVERRIDES!r})
+print(json.dumps({{'cwd': os.getcwd(), 'entries': os.listdir('.'), 'login_env': login_env}}))
+"""
 
 
 @pytest.fixture(autouse=True)
@@ -314,3 +323,52 @@ def test__logged_in__reads_the_json_after_a_warning_line_holding_a_brace():
 
     # Assert
     assert logged_in is True
+
+
+def test__claude__probes_in_a_fresh_empty_directory_it_removes_afterwards(tmp_path, monkeypatch):
+    # Arrange: -p skips the trust prompt, so a project's .claude/settings.json hooks would run.
+    project = tmp_path / 'project'
+    (project / '.claude').mkdir(parents=True)
+    monkeypatch.chdir(project)
+    _install_probe_stub(tmp_path, monkeypatch)
+
+    # Act
+    seen = json.loads(usage_table._claude(['-p', '/usage'], None))
+
+    # Assert
+    assert Path(seen['cwd']).resolve() != project.resolve()
+    assert seen['entries'] == []
+    assert not Path(seen['cwd']).exists()
+
+
+def test__claude__probes_without_login_overrides_even_for_the_default_login(tmp_path, monkeypatch):
+    # Arrange: any of these would report that credential's usage instead of the account's.
+    for name in cc_run.LOGIN_OVERRIDES:
+        monkeypatch.setenv(name, 'secret')
+    _install_probe_stub(tmp_path, monkeypatch)
+
+    # Act
+    seen = json.loads(usage_table._claude(['auth', 'status'], None))
+
+    # Assert
+    assert seen['login_env'] == []
+
+
+def test__claude__reports_a_claude_it_will_not_run(monkeypatch):
+    # Arrange: e.g. an npm shim whose target it cannot find; cmd.exe is never the fallback.
+    def refuse():
+        raise cc_run.ProfileError('C:\\npm\\claude.cmd is not an npm shim with a target that exists')
+
+    monkeypatch.setattr(usage_table, 'claude_command', refuse)
+
+    # Act
+    out = usage_table._claude(['auth', 'status'], None)
+
+    # Assert
+    assert out.startswith('error: ') and 'claude.cmd' in out
+
+
+def _install_probe_stub(tmp_path: Path, monkeypatch) -> None:
+    stub = tmp_path / 'probe_stub.py'
+    stub.write_text(PROBE_STUB)
+    monkeypatch.setattr(usage_table, 'claude_command', lambda: [sys.executable, str(stub)])

@@ -1,9 +1,19 @@
+import json
 import locale
+import sys
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import pytest
 
 import usage_table
+
+LOGIN_OVERRIDES = ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN')
+# Reports where it ran, what was there, and which login overrides reached it.
+PROBE_STUB = f"""import json, os
+login_env = sorted(k for k in os.environ if k in {LOGIN_OVERRIDES!r})
+print(json.dumps({{'cwd': os.getcwd(), 'entries': os.listdir('.'), 'login_env': login_env}}))
+"""
 
 
 @pytest.fixture(autouse=True)
@@ -273,3 +283,42 @@ def test__claude__reports_a_claude_it_cannot_execute(tmp_path, monkeypatch):
 
     # Assert
     assert out.startswith('error: ')
+
+
+def test__claude__probes_in_a_fresh_empty_directory_it_removes_afterwards(tmp_path, monkeypatch):
+    # Arrange: -p skips the trust prompt, so a project's .claude/settings.json hooks would run.
+    project = tmp_path / 'project'
+    (project / '.claude').mkdir(parents=True)
+    monkeypatch.chdir(project)
+    _install_probe_stub(tmp_path, monkeypatch)
+
+    # Act
+    seen = json.loads(usage_table._claude(['-p', '/usage'], None))
+
+    # Assert
+    assert Path(seen['cwd']).resolve() != project.resolve()
+    assert seen['entries'] == []
+    assert not Path(seen['cwd']).exists()
+
+
+def test__claude__probes_without_login_overrides_even_for_the_default_login(tmp_path, monkeypatch):
+    # Arrange: any of these would report that credential's usage instead of the account's.
+    for name in LOGIN_OVERRIDES:
+        monkeypatch.setenv(name, 'secret')
+    _install_probe_stub(tmp_path, monkeypatch)
+
+    # Act
+    seen = json.loads(usage_table._claude(['auth', 'status'], None))
+
+    # Assert
+    assert seen['login_env'] == []
+
+
+def _install_probe_stub(tmp_path: Path, monkeypatch) -> None:
+    bin_dir = tmp_path / 'bin'
+    bin_dir.mkdir()
+    (bin_dir / 'probe_stub.py').write_text(PROBE_STUB)
+    stub = bin_dir / 'claude'
+    stub.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{bin_dir / "probe_stub.py"}" "$@"\n')
+    stub.chmod(0o755)
+    monkeypatch.setenv('PATH', str(bin_dir))
