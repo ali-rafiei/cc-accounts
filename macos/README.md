@@ -122,19 +122,25 @@ deletes that spare copy.
 Only one live copy of a login exists at a time. Claude Code refreshes tokens as it goes,
 and a refresh can leave an older copy dead, so `cc-use` moves a login around instead of
 duplicating it: before loading the next account, it writes whatever is in the default slot
-back to its owner. A few checks guard the swap:
+back to its owner, and once the next account's login is in the slot, it deletes that
+profile's own copy. A few checks guard the swap:
 
 - It takes the same lock directories Claude Code uses for token refreshes and config
   writes, so a session refreshing in the middle of a swap can't write the old account back.
 - It asks Anthropic's profile endpoint whose token is in the slot, and refuses if that isn't
-  the account it last put there. If that check fails, look at what's in the slot before
-  forcing anything.
+  the account it last put there. Offline, it accepts the slot's login only if its refresh
+  token still matches a fingerprint (a SHA-256 hash, in `.loaded-fingerprint`) it recorded
+  when it loaded it. If that check fails, look at what's in the slot before forcing anything.
 - It refuses a profile that has a Claude Code session open, since that session holds its
   own live copy of the login.
-- While a profile is loaded, `cc <that profile>` refuses to start, and `ccusage-all` reads
-  that account's usage through the default login rather than its now-stale copy.
-- If a swap is cut off part way (a closed terminal, say), `cc-use default` works out which
-  profile's login is in the slot and finishes putting yours back.
+- While a profile is loaded, `cc <that profile>` refuses to start, `cc-login default` (and
+  `cc default auth login` or `logout`) refuses because the default slot holds that profile's
+  only login, and `ccusage-all` reads that account's usage through the default login, since
+  the profile holds no login of its own.
+- If a swap from your own login is cut off part way (a closed terminal, say), `cc-use
+  default` works out which profile's login is in the slot and finishes putting yours back.
+  One cut off between two profiles is not finished for you: `cc-use` refuses and names the
+  account in the slot.
 
 ## Things to know
 
@@ -145,6 +151,16 @@ back to its owner. A few checks guard the swap:
   `command cc` when you want the compiler by hand.
 - `cc-use` switches every session on the default login at once: all VS Code tabs and every
   plain `claude` in a terminal. Sessions started with `cc <profile>` are unaffected.
+- `cc-use` refuses to move a login larger than about 2 KB (each MCP server you sign into
+  adds to it). `security` can only take one that size as a command-line argument, where
+  every local user can read it, so the swap stops before changing anything. If the default
+  login grows past it while a profile is loaded (MCP sign-ins in VS Code, say), sign out of
+  those servers in `/mcp` before `cc-use default`.
+- While a profile is loaded, signing the default login in or out anywhere else (`/login` or
+  `/logout` in VS Code, plain `claude auth login`) replaces that profile's only login. Run
+  `cc-use default` first.
+- Profile runs (`cc <profile>`, `cc-run`) and `ccusage-all` ignore `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and
+  `CLAUDE_CODE_OAUTH_TOKEN`, so a profile always runs on its own login.
 - `cc-run` hands tasks over as `claude -p --permission-mode auto`, so the other account can
   edit files and run commands without prompts, with auto mode's classifier still screening
   each action. Haiku has no auto mode, so on Haiku every edit is denied. If the session
@@ -164,14 +180,15 @@ cc-use default            # if a profile is loaded; uninstall refuses otherwise
 ./install.sh --uninstall  # from the clone's macos folder
 ```
 
-That removes the scripts, the `~/.zshrc` line and any skill links from `--skills`. If
-`cc-use` still holds a copy of your login (normally it doesn't, since `cc-use default` deletes
-it), uninstall deletes it once it can confirm your own login is back in the default slot. If
-another account is in the slot, uninstall stops before removing anything, because that copy
-may be your only login: run `cc-use default` first. If it just can't check (offline), it
-keeps the copy and prints the command to delete it later. With a custom
-`CLAUDE_PROFILES`, run the uninstall from a terminal that has it set (any new terminal does,
-until the uninstall removes the line). If you installed the skills as a plugin, remove it
+That removes the scripts, the `~/.zshrc` line (backing up `~/.zshrc` first) and any skill
+links from `--skills`. If `cc-use` still holds a copy of your login (normally it doesn't,
+since `cc-use default` deletes it), uninstall deletes it once it can confirm your own login is
+back in the default slot. If another account is in the slot, uninstall stops before removing
+anything, because that copy may be your only login: run `cc-use default` first. If it just
+can't check (offline), it stops too, since the copy may still be your only login: once
+online, send one message in a plain `claude` session so the login is fresh, then rerun the
+uninstall. With a custom `CLAUDE_PROFILES`, run the uninstall from a terminal that has it set
+(any new terminal does, until the uninstall removes the line). If you installed the skills as a plugin, remove it
 too, from any shell (or as `/plugin uninstall ...` and `/plugin marketplace remove ...`
 inside `claude` in a terminal):
 

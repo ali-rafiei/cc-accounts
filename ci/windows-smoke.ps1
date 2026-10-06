@@ -58,16 +58,22 @@ function Get-Bom([string]$path) {
     return (($bytes | Select-Object -First 3) | ForEach-Object { $_.ToString('X2') }) -join ''
 }
 
-# A stand-in for Claude Code that reports which config dir and arguments it was given.
+# The SIDs a path's access rules name, inherited ones included, sorted and comma-joined.
+function Get-AccessSids([string]$path) {
+    $rules = (Get-Acl -LiteralPath $path).GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])
+    return (($rules | ForEach-Object { $_.IdentityReference.Value }) | Sort-Object -Unique) -join ','
+}
+$ownerOnly = (@([Security.Principal.WindowsIdentity]::GetCurrent().User.Value, 'S-1-5-18', 'S-1-5-32-544') | Sort-Object -Unique) -join ','
+
+# A stand-in for Claude Code that reports which config dir and arguments it was given. It is
+# an npm shim, as npm installs Claude Code, so cc runs its script with node, not through cmd.exe.
 $bin = Join-Path $env:RUNNER_TEMP 'stub-bin'
 New-Item -ItemType Directory -Force -Path $bin | Out-Null
-Set-Content -Path (Join-Path $bin 'claude_stub.py') -Value @'
-import json, os, sys
-print(json.dumps({'config': os.environ.get('CLAUDE_CONFIG_DIR'), 'args': sys.argv[1:]}))
-sys.exit(int(os.environ.get('STUB_EXIT', '0')))
+Set-Content -Path (Join-Path $bin 'claude_stub.js') -Value @'
+console.log(JSON.stringify({config: process.env.CLAUDE_CONFIG_DIR || null, args: process.argv.slice(2)}));
+process.exitCode = Number(process.env.STUB_EXIT || '0');
 '@
-$python = (Get-Command python).Source
-Set-Content -Path (Join-Path $bin 'claude.cmd') -Value "@`"$python`" `"%~dp0claude_stub.py`" %*"
+Set-Content -Path (Join-Path $bin 'claude.cmd') -Value '@"%~dp0\claude_stub.js" %*'
 $env:PATH = "$bin;$env:PATH"
 
 # A default login and one logged-in profile, as files, the way Claude Code stores them on Windows.
@@ -91,6 +97,8 @@ foreach ($path in @($ps5Profile, $ps7Profile, $bashrc)) {
 foreach ($path in @($ps5Profile, $ps7Profile)) {
     Assert ([IO.File]::ReadAllText($path).Contains("caf$([char]0xE9)")) "install kept the existing text of $path"
 }
+Assert ((Get-Acl -LiteralPath $profiles).AreAccessRulesProtected) 'install stops the profiles folder inheriting its parent''s permissions'
+Assert ((Get-AccessSids $profiles) -eq $ownerOnly) "install limits the profiles folder to the user, SYSTEM and Administrators: $(Get-AccessSids $profiles)"
 Assert (-not ([IO.File]::ReadAllBytes($bashrc) -contains 13)) 'install writes LF line endings into .bashrc'
 $out = Invoke-Bash 'source ~/.bashrc'
 Assert ($out -eq '') "Git Bash sources the installed .bashrc cleanly: $out"
@@ -101,6 +109,7 @@ $work = Join-Path $profiles 'work'
 New-Item -ItemType Directory -Force -Path $work | Out-Null
 Set-Content (Join-Path $work '.credentials.json') '{"claudeAiOauth": {"accessToken": "work-at", "refreshToken": "work-rt"}}'
 Set-Content (Join-Path $work '.claude.json') '{"oauthAccount": {"accountUuid": "uuid-work", "emailAddress": "work@example.com"}}'
+Assert ((Get-AccessSids (Join-Path $work '.credentials.json')) -eq $ownerOnly) "a profile's login inherits only the profiles folder's access: $(Get-AccessSids (Join-Path $work '.credentials.json'))"
 
 $seen = Invoke-Shell 'cc work -p hi' | ConvertFrom-Json
 Assert ($seen.config -eq $work) "cc work runs claude with the profile's config dir ($Shell)"
@@ -113,17 +122,29 @@ Assert ($seen.args.Count -eq 3 -and $seen.args[1] -eq 'say "hi there"' -and $see
 $out = Invoke-Shell "`$env:STUB_EXIT = '7'; cc work | Out-Null; `"exit=`$LASTEXITCODE`""
 Assert ($out -eq 'exit=7') "cc returns claude's exit code ($Shell): $out"
 
+$seen = Invoke-Shell "cc work -p 'a`" & echo pwned & `"b' '%PATH%'" | ConvertFrom-Json
+Assert ($seen.args.Count -eq 3 -and $seen.args[1] -eq 'a" & echo pwned & "b' -and $seen.args[2] -eq '%PATH%') "cc passes cmd.exe syntax to claude as text ($Shell): $($seen.args -join '|')"
+
 $seen = Invoke-Shell 'cc default --version' | ConvertFrom-Json
 Assert ($null -eq $seen.config) "cc default runs with no config dir ($Shell)"
+
+# A cloned repo that ships its own claude.bat; Windows would otherwise run it before PATH.
+$untrusted = Join-Path $env:RUNNER_TEMP 'untrusted-repo'
+New-Item -ItemType Directory -Force -Path $untrusted | Out-Null
+Set-Content -Path (Join-Path $untrusted 'claude.bat') -Value '@echo pwned'
+Push-Location $untrusted
+try { $out = Invoke-Shell 'cc default --version' } finally { Pop-Location }
+Assert (-not $out.Contains('pwned') -and $out.Contains('"config":null')) "cc never runs a claude.bat from the current folder ($Shell): $out"
 
 $out = Invoke-Shell 'ccusage-all'
 Assert ($out.Contains('me@example.com') -and $out.Contains('work@example.com') -and -not $out.Contains('Traceback')) "ccusage-all lists every account ($Shell): $out"
 
-# The access tokens are fake, so the identity check cannot resolve them and falls back to
-# comparing refresh tokens, which is the offline path.
+# The access tokens are fake, so the identity check cannot resolve them and cc-use takes its
+# offline path.
 $out = Invoke-Shell 'cc-use work'
 Assert ($out.Contains('default -> work')) "cc-use work loads the profile: $out"
 Assert ((Get-Content (Join-Path $HOME '.claude\.credentials.json') -Raw).Contains('work-rt')) 'the default slot now holds work'
+Assert (-not (Test-Path (Join-Path $work '.credentials.json'))) 'cc-use moves the login out of the profile folder'
 $out = Invoke-Shell 'cc work'
 Assert ($out.Contains('loaded into the default login')) "cc refuses the loaded profile: $out"
 $out = Invoke-Shell 'ccusage-all'
@@ -131,6 +152,7 @@ Assert ($out.Contains('work [default]') -and -not $out.Contains('Traceback')) "c
 $out = Invoke-Shell 'cc-use default'
 Assert ($out.Contains('work -> default')) "cc-use default restores the user's login: $out"
 Assert ((Get-Content (Join-Path $HOME '.claude\.credentials.json') -Raw).Contains('home-rt')) 'the default slot holds the user again'
+Assert ((Get-Content (Join-Path $work '.credentials.json') -Raw).Contains('work-rt')) 'cc-use default puts the login back in the profile folder'
 Assert (-not (Test-Path (Join-Path $profiles '.home-credentials.json'))) 'cc-use default deletes the stash once the user is back'
 
 $seen = Invoke-Bash 'source ~/.bashrc; cc work -p from-bash' | ConvertFrom-Json
@@ -165,13 +187,15 @@ Assert $stopped 'uninstall fails when cc-use refuses because another account is 
 Assert ((Test-Path $stash) -and (Test-Path (Join-Path $profiles 'profiles.ps1'))) 'uninstall removes nothing when another account is in the slot'
 Assert ([IO.File]::ReadAllText($ps7Profile).Contains('cc-accounts')) 'uninstall keeps the profile line when another account is in the slot'
 
-# Uninstall goes on when cc-use only could not confirm the slot, and says how to delete the stash later.
+# It stops the same way when cc-use only could not confirm the slot (offline): the stash may still be the only login.
 Set-Content (Join-Path $profiles 'cc_use.py') "import sys`nprint('cc-use: could not confirm', file=sys.stderr)`nsys.exit(3)"
-$out = Invoke-Installer @('-Uninstall')
-Assert ($out.Contains('kept') -and $out.Contains('.home-credentials.json')) "uninstall reports the kept stash and how to delete it: $out"
-Assert (Test-Path $stash) 'uninstall leaves the stash when cc-use refuses'
-Assert (-not ([IO.File]::ReadAllText($ps7Profile).Contains('cc-accounts'))) 'uninstall still removes the line when cc-use refuses'
+$stopped = $false
+try { Invoke-Installer @('-Uninstall') | Out-Null } catch { $stopped = $true }
+Assert $stopped 'uninstall fails when cc-use could not confirm the slot'
+Assert ((Test-Path $stash) -and (Test-Path (Join-Path $profiles 'cc_use.py'))) 'uninstall keeps the stash and cc-use when cc-use could not confirm the slot'
+Assert ([IO.File]::ReadAllText($ps7Profile).Contains('cc-accounts')) 'uninstall keeps the profile line when cc-use could not confirm the slot'
 Remove-Item $stash
+Invoke-Installer @('-Uninstall') | Out-Null
 
 # A custom profiles folder whose path has a space and an apostrophe, as under C:\Users\O'Brien.
 $custom = Join-Path $env:RUNNER_TEMP "O'Brien profiles"
@@ -179,6 +203,7 @@ New-Item -ItemType Directory -Force -Path (Join-Path $custom 'work') | Out-Null
 $env:CLAUDE_PROFILES = $custom
 Invoke-Installer @() | Out-Null
 Remove-Item Env:CLAUDE_PROFILES
+Assert ((Get-AccessSids (Join-Path $custom 'work')) -eq $ownerOnly) "install tightens what an existing folder already holds: $(Get-AccessSids (Join-Path $custom 'work'))"
 $out = Invoke-Shell 'cc' -UserProfile
 Assert ($out.Contains('profiles: default work')) "the profile line loads a custom folder with an apostrophe ($Shell): $out"
 $out = Invoke-Bash 'source ~/.bashrc; cc'

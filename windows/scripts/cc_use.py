@@ -6,12 +6,14 @@ On Windows, Claude Code keeps a login as plain JSON in `<config dir>/.credential
 profile. The default slot is that file plus `oauthAccount` in ~/.claude.json, and it is
 what VS Code and every plain `claude` run as. A login is moved, not duplicated: the one
 leaving the slot is written back to its owner first, because a session using it may have
-refreshed (rotated) its token. The lock protocol follows claude-swap
+refreshed (rotated) its token, and the one entering is deleted from its profile once it is
+in the slot. The lock protocol follows claude-swap
 (MIT, github.com/realiti4/claude-swap).
 """
 
 from __future__ import annotations
 
+import hashlib
 import http.client
 import json
 import os
@@ -28,6 +30,8 @@ from cc_run import is_existing_profile_name
 
 PROFILES_DIR = Path(os.environ.get('CLAUDE_PROFILES') or Path.home() / '.claude-profiles').expanduser()
 LOADED_FILE = PROFILES_DIR / '.loaded'
+# SHA-256 of the loaded login's refresh token, so the slot can be matched offline without a copy.
+LOADED_FINGERPRINT_FILE = PROFILES_DIR / '.loaded-fingerprint'
 HOME_ACCOUNT_FILE = PROFILES_DIR / '.home-account.json'
 HOME_STASH_FILE = PROFILES_DIR / '.home-credentials.json'
 GLOBAL_CONFIG = Path.home() / '.claude.json'
@@ -45,10 +49,10 @@ CONFIG_LOCK_STALE_S = 10.0
 LOCK_TOUCH_S = 3.0
 LOCK_TIMEOUT_S = 9.0
 # Another process holding the file open (an editor, an indexer, Claude itself mid-read)
-# makes a Windows rename fail for a moment; retry briefly before giving up.
+# makes a Windows rename or delete fail for a moment; retry briefly before giving up.
 REPLACE_ATTEMPTS = 10
 
-# `cc-use forget` exits with this when it only could not check the slot, so uninstall can go on.
+# `cc-use forget` exits with this when it could not check the slot, as opposed to checked and wrong.
 UNCONFIRMED_EXIT = 3
 PROFILE_URL = 'https://api.anthropic.com/api/oauth/profile'
 USAGE = """usage: cc-use                 show which account is in the default slot
@@ -140,22 +144,30 @@ def load(target: str | None) -> str:
             home_account = config.get('oauthAccount')
             if not isinstance(home_account, dict) or not home_account:
                 raise SwapError(f'{GLOBAL_CONFIG} records no oauthAccount for the default login; not swapping')
-            _write_private(HOME_ACCOUNT_FILE, json.dumps(home_account, indent=2))
-        _write_private(_owner_file(owner), current)
+            _write_atomic(HOME_ACCOUNT_FILE, json.dumps(home_account, indent=2))
+        _write_atomic(_owner_file(owner), current)
         try:
-            _write_private(DEFAULT_CREDENTIALS, incoming)
+            _write_atomic(DEFAULT_CREDENTIALS, incoming)
             config['oauthAccount'] = incoming_account
-            _write_private(GLOBAL_CONFIG, json.dumps(config, indent=2))
-            _write_loaded(target)
+            _write_atomic(GLOBAL_CONFIG, json.dumps(config, indent=2))
+            _write_loaded(target, incoming)
+            if target is not None:
+                # Last, so a kill before it leaves a copy for recovery to match, never none.
+                _remove(_owner_file(target))
         except BaseException:
             # Half a swap strands the slot: its login would no longer match what cc-use
-            # recorded, and every retry would be refused. Put all three back as they were,
+            # recorded, and every retry would be refused. Put everything back as it was,
             # each on its own, so one restore that fails does not skip the others.
-            restores = (
-                (DEFAULT_CREDENTIALS, lambda: _write_private(DEFAULT_CREDENTIALS, current)),
-                (GLOBAL_CONFIG, lambda: _write_private(GLOBAL_CONFIG, config_text)),
-                (LOADED_FILE, lambda: _write_loaded(owner)),
-            )
+            restores = [
+                (DEFAULT_CREDENTIALS, lambda: _write_atomic(DEFAULT_CREDENTIALS, current)),
+                (GLOBAL_CONFIG, lambda: _write_atomic(GLOBAL_CONFIG, config_text)),
+                (LOADED_FILE, lambda: _write_loaded(owner, current)),
+            ]
+            if target is not None:
+                # Before the slot is put back, so the incoming login is never without a copy.
+                restores.insert(0, (_owner_file(target), lambda: _write_atomic(_owner_file(target), incoming)))
+            if owner is not None:
+                restores.append((_owner_file(owner), lambda: _remove_if_in_slot(_owner_file(owner), current)))
             for path, restore in restores:
                 try:
                     restore()
@@ -309,7 +321,13 @@ def _verify_owner(current: str, owner: str | None, doing: str = 'swapping') -> N
                 f'{_label(owner)} ({expected.get("emailAddress")}); not {doing}{hint}'
             )
         return
-    if stored is None or _oauth(stored).get('refreshToken') == _oauth(current).get('refreshToken'):
+    if stored is not None:
+        matches = _oauth(stored).get('refreshToken') == _oauth(current).get('refreshToken')
+    else:
+        # A loaded profile's own file moved into the slot; its fingerprint stands in for it.
+        fingerprint = _fingerprint(current)
+        matches = owner is None or (fingerprint is not None and fingerprint == _recorded_fingerprint())
+    if matches:
         return
     raise UnconfirmedOwner(
         'could not confirm whose login is in the default slot (offline, or its '
@@ -397,11 +415,26 @@ def _profile_account(name: str) -> dict:
     return account
 
 
-def _write_loaded(profile: str | None) -> None:
+def _write_loaded(profile: str | None, login: str) -> None:
+    """Record the loaded profile and its login's fingerprint; .loaded never exists without one."""
     if profile is None:
         LOADED_FILE.unlink(missing_ok=True)
+        LOADED_FINGERPRINT_FILE.unlink(missing_ok=True)
     else:
+        LOADED_FINGERPRINT_FILE.write_text((_fingerprint(login) or '') + '\n')
         LOADED_FILE.write_text(profile + '\n')
+
+
+def _fingerprint(credentials: str) -> str | None:
+    refresh_token = _oauth(credentials).get('refreshToken')
+    return hashlib.sha256(refresh_token.encode()).hexdigest() if refresh_token else None
+
+
+def _recorded_fingerprint() -> str | None:
+    try:
+        return LOADED_FINGERPRINT_FILE.read_text().strip() or None
+    except FileNotFoundError:
+        return None
 
 
 def _read_json(path: Path) -> dict:
@@ -424,7 +457,7 @@ def _read_secret(path: Path) -> str | None:
         return None
 
 
-def _write_private(path: Path, text: str) -> None:
+def _write_atomic(path: Path, text: str) -> None:
     """Write through a temp file and an atomic rename, so no reader ever sees half a file."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f'.{path.name}.')
@@ -433,7 +466,6 @@ def _write_private(path: Path, text: str) -> None:
             fh.write(text)
             fh.flush()
             os.fsync(fh.fileno())
-        os.chmod(tmp, 0o600)
         _replace(tmp, path)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
@@ -441,13 +473,27 @@ def _write_private(path: Path, text: str) -> None:
 
 
 def _replace(source: str, destination: Path) -> None:
+    _retry_while_locked(destination, lambda: os.replace(source, destination))
+
+
+def _remove(path: Path) -> None:
+    _retry_while_locked(path, lambda: path.unlink(missing_ok=True))
+
+
+def _remove_if_in_slot(path: Path, login: str) -> None:
+    """Delete path's copy of a login only once the slot is known to hold it."""
+    if _read_secret(DEFAULT_CREDENTIALS) == login:
+        _remove(path)
+
+
+def _retry_while_locked(path: Path, operation) -> None:
     for attempt in range(REPLACE_ATTEMPTS):
         try:
-            os.replace(source, destination)
+            operation()
             return
         except PermissionError:
             if attempt == REPLACE_ATTEMPTS - 1:
-                raise SwapError(f'{destination} stayed locked by another program; retry') from None
+                raise SwapError(f'{path} stayed locked by another program; retry') from None
             time.sleep(0.1)
 
 

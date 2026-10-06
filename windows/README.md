@@ -49,8 +49,9 @@ If PowerShell refuses to run the script, use
 execution policy would also stop your PowerShell profile from loading the commands; the
 usual fix is `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
 
-`install.ps1` copies five files into `~\.claude-profiles` (or `$env:CLAUDE_PROFILES`). It
-then adds one line to your PowerShell profiles (both Windows PowerShell's and PowerShell
+`install.ps1` copies five files into `~\.claude-profiles` (or `$env:CLAUDE_PROFILES`), and
+limits that folder, which holds every profile's login, to your account, SYSTEM and
+Administrators, so it stops inheriting whatever its parent allows. It then adds one line to your PowerShell profiles (both Windows PowerShell's and PowerShell
 7's) and to `~\.bashrc` for Git Bash, unless the line is already there. If you have a
 `~\.bash_profile` that doesn't load `~\.bashrc`, it adds the line there too. A relative or
 `~` path in `$env:CLAUDE_PROFILES` is turned into a full path first. It backs up any file it
@@ -88,6 +89,10 @@ $env:CLAUDE_PROFILES = 'D:\claude-profiles'
 .\install.ps1
 ```
 
+A folder like that would otherwise take the drive root's permissions, which usually let
+other accounts on the machine read and change it; the installer limits it the same way as
+the default one, on every run.
+
 ## Quick start
 
 Open a new PowerShell window after installing, then:
@@ -124,23 +129,29 @@ profile. VS Code and plain `claude` use the default one, plus the account detail
 `~\.claude.json`. `cc-use work` swaps in work's login and account details. New sessions
 start on it straight away, and running ones pick it up on their next message. Your own login
 waits in `~\.claude-profiles\.home-credentials.json` until `cc-use default` puts it back and
-deletes that spare copy. If a swap is cut off part way (a closed window, say), `cc-use
-default` works out which profile's login is in the slot and finishes putting yours back.
+deletes that spare copy. If a swap from your own login is cut off part way (a closed
+window, say), `cc-use default` works out which profile's login is in the slot and finishes
+putting yours back. One cut off between two profiles is not finished for you: `cc-use`
+refuses and names the account in the slot.
 
 Only one live copy of a login exists at a time. Claude Code refreshes tokens as it goes, and
 a refresh can leave an older copy dead, so `cc-use` moves a login around instead of
 duplicating it: before loading the next account, it writes whatever is in the default slot
-back to its owner. A few checks guard the swap:
+back to its owner, and once the next account's login is in the slot, it deletes that
+profile's own file. A few checks guard the swap:
 
 - It takes the same lock folders Claude Code uses for token refreshes and config writes, so
   a session refreshing in the middle of a swap can't write the old account back.
 - It asks Anthropic's profile endpoint whose token is in the slot, and refuses if that isn't
   the account it last put there. If that check fails, look at what's in the slot before
-  forcing anything.
+  forcing anything. Offline it can't ask, so it compares the slot's login with a fingerprint
+  (a SHA-256 hash, not the token) of the one it loaded, kept in `.loaded-fingerprint` while
+  that profile is loaded, and refuses if they differ.
 - It refuses a profile that has a Claude Code session open, since that session holds its own
   live copy of the login.
 - While a profile is loaded, `cc <that profile>` refuses to start, and `ccusage-all` reads that
-  account's usage through the default login rather than its now-stale copy.
+  account's usage through the default login, where its login now is. `cc-login default` and
+  `cc default auth login` or `logout` refuse too, since they would overwrite that login.
 - If antivirus or a sync tool has a file open for a moment, it retries for about a second
   before giving up.
 
@@ -156,8 +167,17 @@ back to its owner. A few checks guard the swap:
   as `C:/Program Files/Git/review`; write `//review` instead.
 - `cc-use` switches every session on the default login at once: all VS Code tabs and every
   plain `claude`. Sessions started with `cc <profile>` are unaffected.
-- Logins on Windows are plain JSON files in your user folder; that is how Claude Code itself
-  stores them there. The copies `cc-use` keeps sit in your user folder the same way.
+- While a profile is loaded, signing the default login in or out anywhere else (`/login` or
+  `/logout` in VS Code, plain `claude auth login`) replaces that profile's only login. Run
+  `cc-use default` first.
+- Profile runs (`cc <profile>`, `cc-run`) and `ccusage-all` ignore `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and
+  `CLAUDE_CODE_OAUTH_TOKEN`, so a profile always runs on its own login.
+- `cc` and `ccusage-all` find `claude` on PATH only, never in the current folder, and run an
+  npm `claude.cmd` through the program it points to rather than cmd.exe. A `claude.cmd` that
+  isn't an npm shim is refused.
+- Logins on Windows are plain JSON files; that is how Claude Code itself stores them. The
+  default one is in your user folder. Each profile's, and the copies `cc-use` keeps, are in
+  the profiles folder, which the installer limits to your account, SYSTEM and Administrators.
 - For interactive `cc <profile>` sessions in Git Bash, run Git Bash inside Windows Terminal.
   The older mintty window may not give Claude Code a proper console. PowerShell has no such
   issue.
@@ -183,7 +203,9 @@ skill links from `-Skills`. If `cc-use` still holds a copy of your login (normal
 doesn't, since `cc-use default` deletes it), uninstall deletes it once it can confirm your own
 login is back in the default slot. If another account is in the slot, uninstall stops before
 removing anything, because that copy may be your only login: run `cc-use default` first. If
-it just can't check (offline), it keeps the copy and prints the command to delete it later. With a
+it just can't check (offline), it stops too, since the copy may still be your only login: once
+online, send one message in a plain `claude` session so the login is fresh, then rerun the
+uninstall. With a
 custom `CLAUDE_PROFILES`, run the uninstall from a PowerShell window that has it set (any new
 window does, until the uninstall removes the line). If you installed the skills as a plugin,
 remove it too, from PowerShell or Git Bash (or as `/plugin uninstall ...` and

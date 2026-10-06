@@ -11,6 +11,12 @@ pytestmark = pytest.mark.skipif(shutil.which('zsh') is None, reason='the cc func
 
 # Stands in for the real CLI so the tests see which config dir `cc` hands it.
 CLAUDE_STUB = 'claude() { print -r -- "CONFIG=${CLAUDE_CONFIG_DIR:-none} ARGS=$*"; }'
+# Reports what a child process of claude would see: its config dir and any login overrides.
+ENV_STUB = (
+    'claude() { print -r -- "CONFIG=$(printenv CLAUDE_CONFIG_DIR) LOGIN=$(env | grep -E '
+    "'^(ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|CLAUDE_CODE_OAUTH_TOKEN)=' | cut -d= -f1 | sort | tr '\\n' ' ')\"; }"
+)
+LOGIN_OVERRIDES = {'ANTHROPIC_API_KEY': 'sk-ant', 'ANTHROPIC_AUTH_TOKEN': 'bearer', 'CLAUDE_CODE_OAUTH_TOKEN': 'oauth'}
 
 
 @pytest.fixture
@@ -145,6 +151,16 @@ def test__uninstall__removes_the_scripts_and_keeps_the_profiles(home):
     assert (home / '.claude-profiles' / 'work').is_dir()
 
 
+def test__uninstall__puts_zshrc_back_byte_for_byte(home):
+    # Arrange: the fixture installed into a ~/.zshrc that held only '# existing\n'.
+
+    # Act
+    _run(['bash', str(REPO / 'install.sh'), '--uninstall'], home)
+
+    # Assert: the blank line install put before the source line goes too.
+    assert (home / '.zshrc').read_text() == '# existing\n'
+
+
 def test__uninstall__keeps_a_symlinked_zshrc_a_symlink(home):
     # Arrange: ~/.zshrc lives in a dotfiles repo.
     dotfiles = home / 'dotfiles'
@@ -161,6 +177,46 @@ def test__uninstall__keeps_a_symlinked_zshrc_a_symlink(home):
     assert (home / '.zshrc').is_symlink()
     assert '# cc-accounts' not in real.read_text()
     assert '# existing' in real.read_text()
+
+
+def test__uninstall__keeps_a_zshrc_with_a_nul_byte_whole(home):
+    # Arrange: grep reads a file with a NUL byte as binary unless told otherwise.
+    zshrc = home / '.zshrc'
+    zshrc.write_bytes(b'export A=1\x00\n' + zshrc.read_bytes())
+
+    # Act
+    _run(['bash', str(REPO / 'install.sh'), '--uninstall'], home)
+
+    # Assert
+    kept = zshrc.read_bytes()
+    assert kept.startswith(b'export A=1\x00\n# existing\n')
+    assert b'# cc-accounts' not in kept
+
+
+def test__uninstall__keeps_a_line_of_yours_that_mentions_the_marker(home):
+    # Arrange
+    zshrc = home / '.zshrc'
+    zshrc.write_text("alias notes='echo # cc-accounts setup'\n" + zshrc.read_text())
+
+    # Act
+    _run(['bash', str(REPO / 'install.sh'), '--uninstall'], home)
+
+    # Assert
+    kept = zshrc.read_text()
+    assert "alias notes='echo # cc-accounts setup'" in kept
+    assert 'profiles.zsh' not in kept
+
+
+def test__uninstall__backs_up_zshrc_before_removing_the_line(home):
+    # Arrange
+    before = (home / '.zshrc').read_text()
+
+    # Act
+    _run(['bash', str(REPO / 'install.sh'), '--uninstall'], home)
+
+    # Assert
+    backups = list(home.glob('.zshrc.bak-*'))
+    assert [b.read_text() for b in backups] == [before]
 
 
 def test__install__custom_location_exports_it_for_the_functions(tmp_path):
@@ -424,7 +480,7 @@ def test__install__adds_the_line_when_zshrc_only_has_it_commented_out(tmp_path):
     assert '# cc-accounts' in (tmp_path / '.zshrc').read_text()
 
 
-def test__uninstall__keeps_going_when_forget_cannot_confirm(home):
+def test__uninstall__stops_when_forget_cannot_confirm(home):
     # Arrange: cc-use has a stash, and forget cannot confirm whose login is in the slot (a stub
     # stands in for cc_use.py so the real Keychain is never touched).
     dest = home / '.claude-profiles'
@@ -434,11 +490,12 @@ def test__uninstall__keeps_going_when_forget_cannot_confirm(home):
     # Act
     done = _run(['bash', str(REPO / 'install.sh'), '--uninstall'], home, check=False)
 
-    # Assert
-    assert done.returncode == 0, done.stdout
-    assert not (dest / 'profiles.zsh').exists()
-    assert '# cc-accounts' not in (home / '.zshrc').read_text()
-    assert 'security delete-generic-password' in done.stdout
+    # Assert: the stash may be your only login, so cc-use, which can put it back, stays.
+    assert done.returncode != 0
+    assert (dest / 'cc_use.py').exists()
+    assert '# cc-accounts' in (home / '.zshrc').read_text()
+    assert 'online' in done.stdout
+    assert 'delete-generic-password' not in done.stdout
 
 
 def test__uninstall__stops_when_the_stash_holds_your_only_login(home):
@@ -450,7 +507,7 @@ def test__uninstall__stops_when_the_stash_holds_your_only_login(home):
     # Act
     done = _run(['bash', str(REPO / 'install.sh'), '--uninstall'], home, check=False)
 
-    # Assert: nothing is removed, and the stash is not called harmless.
+    # Assert: nothing is removed, and no command to delete the stash is offered.
     assert done.returncode != 0
     assert (dest / 'profiles.zsh').exists()
     assert '# cc-accounts' in (home / '.zshrc').read_text()
@@ -458,7 +515,7 @@ def test__uninstall__stops_when_the_stash_holds_your_only_login(home):
 
 
 def test__ccusage_all__raw_skips_the_loaded_profiles_own_copy(home):
-    # Arrange: work's login is in the default slot, so its own copy may be stale.
+    # Arrange: cc-use moved work's login into the default slot, so work holds none of its own.
     (home / '.claude-profiles' / 'work').mkdir()
     (home / '.claude-profiles' / 'personal').mkdir()
     (home / '.claude-profiles' / '.loaded').write_text('work\n')
@@ -490,11 +547,11 @@ def test__uninstall__deletes_the_stash_through_forget(home):
     (dest / 'cc_use.py').write_text('import sys\nopen(sys.argv[0] + ".args", "w").write(" ".join(sys.argv[1:]))\n')
 
     # Act
-    done = _run(['bash', str(REPO / 'install.sh'), '--uninstall'], home)
+    _run(['bash', str(REPO / 'install.sh'), '--uninstall'], home)
 
     # Assert
     assert (dest / 'cc_use.py.args').read_text() == 'forget'
-    assert 'kept' not in done.stdout
+    assert not (dest / 'cc_use.py').exists()
 
 
 def test__install__help_prints_only_the_header_comment(tmp_path):
@@ -506,6 +563,80 @@ def test__install__help_prints_only_the_header_comment(tmp_path):
     assert lines[0] == 'Install the shell side of cc-accounts.'
     assert 'set -euo pipefail' not in out
     assert lines[-1].startswith('A file already installed')
+
+
+def test__cc__drops_login_overrides_for_a_named_profile(home):
+    # Arrange: any of these would run the profile on that credential instead of its own login.
+    (home / '.claude-profiles' / 'work').mkdir()
+
+    # Act
+    out = _zsh(f'{ENV_STUB}; cc work', home, extra_env=LOGIN_OVERRIDES)
+
+    # Assert
+    assert out == f'CONFIG={home}/.claude-profiles/work LOGIN='
+
+
+def test__cc__default_keeps_login_overrides(home):
+    # Act
+    out = _zsh(f'{ENV_STUB}; cc default', home, extra_env=LOGIN_OVERRIDES)
+
+    # Assert
+    assert out == 'CONFIG= LOGIN=ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN'
+
+
+def test__ccusage_all__raw_probes_without_login_overrides(home):
+    # Arrange
+    (home / '.claude-profiles' / 'work').mkdir()
+
+    # Act
+    out = _zsh(f'{ENV_STUB}; ccusage-all --raw', home, extra_env=LOGIN_OVERRIDES)
+
+    # Assert
+    assert 'CONFIG= LOGIN=' in out.splitlines()
+    assert f'CONFIG={home}/.claude-profiles/work LOGIN=' in out.splitlines()
+
+
+def test__ccusage_all__raw_probes_in_a_fresh_empty_directory_it_removes_afterwards(home):
+    # Arrange: -p skips the trust prompt, so this directory's .claude/settings.json hooks would run.
+    (home / '.claude-profiles' / 'work').mkdir()
+    stub = 'claude() { print -r -- "PWD=$PWD FILES=$(ls -A | wc -l | tr -d \' \')"; }'
+
+    # Act
+    out = _zsh(f'{stub}; ccusage-all --raw; print -r -- "AFTER=$PWD"', home)
+
+    # Assert
+    probes = [line.split() for line in out.splitlines() if line.startswith('PWD=')]
+    assert len(probes) == 2
+    for cwd, files in probes:
+        assert cwd != f'PWD={home}' and files == 'FILES=0'
+        assert not Path(cwd.removeprefix('PWD=')).exists()
+    assert f'AFTER={home}' in out.splitlines()
+
+
+@pytest.mark.parametrize('command', ['cc-login default', 'cc default auth login', 'cc default auth logout'])
+def test__cc__default_auth_refuses_while_a_profile_is_loaded(home, command):
+    # Arrange: the default slot holds work's only login.
+    (home / '.claude-profiles' / 'work').mkdir()
+    (home / '.claude-profiles' / '.loaded').write_text('work\n')
+
+    # Act
+    out = _zsh(command, home, check=False)
+
+    # Assert
+    assert 'cc-use default' in out
+    assert 'CONFIG=' not in out
+
+
+def test__cc__default_runs_other_commands_while_a_profile_is_loaded(home):
+    # Arrange
+    (home / '.claude-profiles' / 'work').mkdir()
+    (home / '.claude-profiles' / '.loaded').write_text('work\n')
+
+    # Act
+    out = _zsh('cc default auth status', home)
+
+    # Assert
+    assert out == 'CONFIG=none ARGS=auth status'
 
 
 def _zsh(command: str, home: Path, check: bool = True, extra_env: dict[str, str] | None = None) -> str:

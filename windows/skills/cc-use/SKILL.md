@@ -54,6 +54,8 @@ On a `cc-use:` error, relay the line; it names the cause. The refusals are delib
 On Windows, Claude Code keeps each login as a file: `~/.claude/.credentials.json` for the
 default login, `<profile>/.credentials.json` for a profile. `cc_use.py` moves that file's
 contents and `oauthAccount` in `~/.claude.json`, writing the outgoing login back to its owner
-first. The user's own login waits in `~/.claude-profiles/.home-credentials.json` while another
-is loaded. The loaded profile is recorded in `~/.claude-profiles/.loaded`; while it is set,
-`cc <that profile>` refuses and the usage table reads that profile through the default login.
+first and deleting the incoming profile's own file once its login is in the slot. The user's
+own login waits in `~/.claude-profiles/.home-credentials.json` while another is loaded. The
+loaded profile is recorded in `~/.claude-profiles/.loaded`; while it is set,
+`cc <that profile>` and `cc-login default` refuse, and the usage table reads that profile
+through the default login.

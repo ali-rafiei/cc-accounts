@@ -39,6 +39,7 @@ function Main {
 
 function Install-Scripts {
     New-Item -ItemType Directory -Force -Path $dest | Out-Null
+    Protect-ProfilesFolder
     foreach ($name in $scripts) { Copy-WithBackup (Join-Path $repo "scripts\$name") (Join-Path $dest $name) }
 
     if ($dest -eq $defaultDest) {
@@ -84,13 +85,10 @@ function Uninstall-Scripts {
     }
     $stashFiles = @((Join-Path $dest '.home-credentials.json'), (Join-Path $dest '.home-account.json'))
     if (($stashFiles | Where-Object { Test-Path $_ }).Count -gt 0) {
-        # forget exits 3 when it only could not check the slot (offline): the stash is then a
-        # harmless spare and the rest still goes. Any other refusal means the stash may be your
-        # only login, so nothing is removed, cc-use included.
+        # Any refusal, offline (3) included, keeps cc-use: the stash may be your only login.
         $forget = Invoke-Python (Join-Path $dest 'cc_use.py') forget
         if ($forget -eq 3) {
-            $quoted = ($stashFiles | ForEach-Object { "'$($_ -replace "'", "''")'" }) -join ', '
-            Write-Warning "cc-use kept its stashed copy of your login (reason above). It is harmless; once your own login is back in the default slot, delete it with: Remove-Item -Force $quoted"
+            Write-Error 'cc-use could not confirm whose login is in the default slot (reason above), so its stash may be your only login and nothing was uninstalled. Once online, send one message in a plain `claude` session so the login is fresh, then rerun.'
         } elseif ($forget -ne 0) {
             Write-Error 'cc-use would not delete its stashed copy of your login (reason above), so nothing was uninstalled. Run `cc-use default` first.'
         }
@@ -120,6 +118,25 @@ function Install-SkillLinks {
             Write-Output "linked skill $name"
         }
     }
+}
+
+# Every login lives under $dest, so other local accounts must not inherit access from its parent.
+function Protect-ProfilesFolder {
+    try {
+        $acl = Get-Acl -LiteralPath $dest
+        $acl.SetAccessRuleProtection($true, $false)
+        foreach ($rule in $acl.GetAccessRules($true, $false, [System.Security.Principal.SecurityIdentifier])) {
+            $acl.RemoveAccessRuleSpecific($rule)
+        }
+        foreach ($sid in @([System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value, 'S-1-5-18', 'S-1-5-32-544')) {
+            $identity = New-Object System.Security.Principal.SecurityIdentifier $sid
+            $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule $identity, 'FullControl', 'ContainerInherit, ObjectInherit', 'None', 'Allow'))
+        }
+        Set-Acl -LiteralPath $dest -AclObject $acl
+    } catch {
+        Write-Error "could not limit $dest to your account, SYSTEM and Administrators, so nothing was installed: $($_.Exception.Message)"
+    }
+    Write-Output "limited $dest to your account, SYSTEM and Administrators"
 }
 
 function Copy-WithBackup([string]$source, [string]$target) {

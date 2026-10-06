@@ -4,7 +4,8 @@
 The default slot (the `Claude Code-credentials` Keychain item plus `oauthAccount` in
 ~/.claude.json) is what VS Code and every plain `claude` run as. A login is moved, never
 copied: the one leaving the slot is written back to its owner first, because a session
-using it may have refreshed (rotated) its token. The lock protocol and the Keychain I/O
+using it may have refreshed (rotated) its token, and the one entering is deleted from its
+profile's own item once it is in the slot. The lock protocol and the Keychain I/O
 follow claude-swap (MIT, github.com/realiti4/claude-swap).
 """
 
@@ -34,6 +35,8 @@ except ImportError:  # Windows: cc-use refuses to run there anyway
 
 PROFILES_DIR = Path(os.environ.get('CLAUDE_PROFILES') or Path.home() / '.claude-profiles').expanduser()
 LOADED_FILE = PROFILES_DIR / '.loaded'
+# SHA-256 of the loaded login's refresh token, the offline proof of whose login is in the slot.
+LOADED_FINGERPRINT_FILE = PROFILES_DIR / '.loaded-fingerprint'
 HOME_ACCOUNT_FILE = PROFILES_DIR / '.home-account.json'
 RESERVED_NAMES = {'bin', 'default'}
 GLOBAL_CONFIG = Path.home() / '.claude.json'
@@ -151,6 +154,14 @@ def load(target: str | None) -> str:
                 f'{target} is not logged in (cc-login {target})' if target else 'no stashed login to restore'
             )
         incoming_account = _profile_account(target) if target else _read_json(HOME_ACCOUNT_FILE)
+        # Every write the swap or its rollback could make, checked before the first one happens.
+        for service, secret in (
+            (_owner_service(owner), current),
+            (DEFAULT_SERVICE, incoming),
+            (_owner_service(target), incoming),
+            (DEFAULT_SERVICE, current),
+        ):
+            _keychain_set_command(service, secret)
         config = _read_json(GLOBAL_CONFIG)
         # The record goes first: uninstall runs `forget` only when it exists, so no stash may outlive it.
         if owner is None:
@@ -158,20 +169,27 @@ def load(target: str | None) -> str:
             if not isinstance(home_account, dict) or not home_account:
                 raise SwapError(f'{GLOBAL_CONFIG} records no oauthAccount for the default login; not swapping')
             _write_json(HOME_ACCOUNT_FILE, home_account)
-        _keychain_set(_owner_service(owner), current)
         # From here on the slot, ~/.claude.json and .loaded must change together; a
         # half-done swap would make _verify_owner refuse every later run.
-        config_written = False
+        moved = config_written = False
         try:
+            _keychain_set(_owner_service(owner), current)
             _keychain_set(DEFAULT_SERVICE, incoming)
+            # Moved, not copied: a session run on the profile's own copy would strand the slot's.
+            if target is not None:
+                moved = True
+                _keychain_delete(_owner_service(target))
             _write_json(GLOBAL_CONFIG, {**config, 'oauthAccount': incoming_account})
             config_written = True
-            _write_loaded(target)
+            _write_loaded(target, incoming)
         except BaseException:
-            _undo(_keychain_set, DEFAULT_SERVICE, current)
+            # Until the profile's item is back, the slot may hold its login's only copy.
+            if not moved or _undo(_keychain_set, _owner_service(target), incoming):
+                if _undo(_keychain_set, DEFAULT_SERVICE, current) and owner is not None:
+                    _undo(_keychain_delete, _owner_service(owner))
             if config_written:
                 _undo(_write_json, GLOBAL_CONFIG, config)
-                _undo(_write_loaded, owner)
+                _undo(_write_loaded, owner, current)
             raise
         # Your login is back in the slot, so the stash is a stale copy from here on.
         note = ''
@@ -240,12 +258,14 @@ def _profiles_holding(account_uuid: str) -> list[str]:
     return names
 
 
-def _undo(step, *args) -> None:
-    """One rollback step; a failure is reported and the next step still runs."""
+def _undo(step, *args) -> bool:
+    """One rollback step; a failure is reported and the next step still runs. True if it succeeded."""
     try:
         step(*args)
     except Exception as exc:  # the caller re-raises the error that started the rollback
         print(f'cc-use: could not undo {step.__name__}({args[0]!r}): {exc}', file=sys.stderr)
+        return False
+    return True
 
 
 def loaded_profile() -> str | None:
@@ -303,9 +323,11 @@ def _alive(pid: int) -> bool:
 def _verify_owner(current: str, owner: str | None, doing: str = 'swapping') -> None:
     """Refuse when the slot's login is not the account cc-use last put there.
 
-    Writing it back would otherwise hand one account's login to another's profile.
+    Writing it back would otherwise hand one account's login to another's profile. Offline,
+    a loaded profile's login is matched against the fingerprint recorded when it moved in,
+    and your own against the stash.
     """
-    stored = _keychain_get(_owner_service(owner))
+    stored = _keychain_get(HOME_STASH_SERVICE) if owner is None else None
     expected = _profile_account(owner) if owner else _home_account(stored)
     identity = _fetch_identity(_oauth(current).get('accessToken'))
     if identity is not None:
@@ -329,7 +351,16 @@ def _verify_owner(current: str, owner: str | None, doing: str = 'swapping') -> N
                     )
             raise SwapError(message)
         return
-    if stored is None or _oauth(stored).get('refreshToken') == _oauth(current).get('refreshToken'):
+    if owner is not None:
+        # A loaded profile has no item of its own, unless a killed swap wrote the slot back to it
+        # first; then that item, not the fingerprint, says what the owner's login is.
+        held = _keychain_get(_owner_service(owner))
+        if held is not None:
+            if _oauth(held).get('refreshToken') == _oauth(current).get('refreshToken'):
+                return
+        elif (fingerprint := _fingerprint(current)) is not None and fingerprint == _loaded_fingerprint():
+            return
+    elif stored is None or _oauth(stored).get('refreshToken') == _oauth(current).get('refreshToken'):
         return
     raise UnconfirmedError(
         'could not confirm whose login is in the default slot (offline, or its '
@@ -380,11 +411,30 @@ def _profile_account(name: str) -> dict:
     return account
 
 
-def _write_loaded(profile: str | None) -> None:
+def _write_loaded(profile: str | None, credentials: str) -> None:
+    """Record whose login, `credentials`, is in the slot; the fingerprint goes first so .loaded never lacks it."""
     if profile is None:
         LOADED_FILE.unlink(missing_ok=True)
+        LOADED_FINGERPRINT_FILE.unlink(missing_ok=True)
+        return
+    fingerprint = _fingerprint(credentials)
+    if fingerprint is None:
+        LOADED_FINGERPRINT_FILE.unlink(missing_ok=True)
     else:
-        LOADED_FILE.write_text(profile + '\n')
+        LOADED_FINGERPRINT_FILE.write_text(fingerprint + '\n')
+    LOADED_FILE.write_text(profile + '\n')
+
+
+def _fingerprint(credentials: str) -> str | None:
+    token = _oauth(credentials).get('refreshToken')
+    return hashlib.sha256(token.encode()).hexdigest() if isinstance(token, str) and token else None
+
+
+def _loaded_fingerprint() -> str | None:
+    try:
+        return LOADED_FINGERPRINT_FILE.read_text().strip() or None
+    except FileNotFoundError:
+        return None
 
 
 def _read_json(path: Path) -> dict:
@@ -433,15 +483,21 @@ def _keychain_get(service: str) -> str | None:
 
 
 def _keychain_set(service: str, secret: str) -> None:
-    hex_secret = secret.encode().hex()
-    account = _keychain_account()
-    command = f'add-generic-password -U -a "{account}" -s "{service}" -X {hex_secret}\n'
-    if len(command.encode()) <= SECURITY_STDIN_LINE_LIMIT:
-        done = _security(['-i'], stdin=command)
-    else:
-        done = _security(['add-generic-password', '-U', '-a', account, '-s', service, '-X', hex_secret])
+    done = _security(['-i'], stdin=_keychain_set_command(service, secret))
     if done.returncode != 0:
         raise SwapError(f'Keychain write of {service!r} failed (rc={done.returncode}): {done.stderr.strip()}')
+
+
+def _keychain_set_command(service: str, secret: str) -> str:
+    """The `security -i` line that writes secret. Past the line limit there is no safe way to write it:
+    as an argument, the token would be readable by every local user through ps."""
+    command = f'add-generic-password -U -a "{_keychain_account()}" -s "{service}" -X {secret.encode().hex()}\n'
+    if len(command.encode()) > SECURITY_STDIN_LINE_LIMIT:
+        raise SwapError(
+            f'the login for {service!r} is too large ({len(secret.encode())} bytes) to write through '
+            "`security`'s stdin, and as an argument its token would be visible to other processes"
+        )
+    return command
 
 
 def _keychain_delete(service: str) -> None:

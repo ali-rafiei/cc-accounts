@@ -6,9 +6,49 @@ import pytest
 
 import cc_run
 
-STUB = """import json, os, sys
+LOGIN_ENV = {'ANTHROPIC_API_KEY': 'sk-ant', 'ANTHROPIC_AUTH_TOKEN': 'bearer', 'CLAUDE_CODE_OAUTH_TOKEN': 'oauth'}
+STUB = f"""import json, os, sys
 stdin = '' if sys.stdin is None or sys.stdin.isatty() else sys.stdin.read()
-print(json.dumps({'config': os.environ.get('CLAUDE_CONFIG_DIR'), 'args': sys.argv[1:], 'stdin': stdin}))
+login_env = sorted(k for k in os.environ if k in {sorted(LOGIN_ENV)!r})
+config = os.environ.get('CLAUDE_CONFIG_DIR')
+print(json.dumps({{'config': config, 'args': sys.argv[1:], 'stdin': stdin, 'login_env': login_env}}))
+"""
+# On Windows the stand-in is an npm shim, which cc_run runs through node rather than cmd.exe.
+STUB_JS = f"""const fs = require('fs');
+const env = process.env;
+const stdin = process.stdin.isTTY ? '' : fs.readFileSync(0, 'utf8');
+const loginEnv = {json.dumps(sorted(LOGIN_ENV))}.filter((k) => k in env);
+const config = env.CLAUDE_CONFIG_DIR || null;
+console.log(JSON.stringify({{config, args: process.argv.slice(2), stdin, login_env: loginEnv}}));
+"""
+NPM_SHIM = (
+    r"""@ECHO off
+GOTO start
+:find_dp0
+SET dp0=%~dp0
+EXIT /b
+:start
+SETLOCAL
+CALL :find_dp0
+
+IF EXIST "%dp0%\node.exe" (
+  SET "_prog=%dp0%\node.exe"
+) ELSE (
+  SET "_prog=node"
+  SET PATHEXT=%PATHEXT:;.JS;=;%
+)
+
+endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%" """
+    r""" "%dp0%\node_modules\@anthropic-ai\claude-code\cli.js" %*
+"""
+)
+OLD_NPM_SHIM = r"""@IF EXIST "%~dp0\node.exe" (
+  "%~dp0\node.exe"  "%~dp0\node_modules\@anthropic-ai\claude-code\cli.js" %*
+) ELSE (
+  @SETLOCAL
+  @SET PATHEXT=%PATHEXT:;.JS;=;%
+  node  "%~dp0\node_modules\@anthropic-ai\claude-code\cli.js" %*
+)
 """
 
 
@@ -27,15 +67,29 @@ def machine(tmp_path, monkeypatch):
 
     bin_dir = tmp_path / 'bin'
     bin_dir.mkdir()
-    (bin_dir / 'claude_stub.py').write_text(STUB)
     if sys.platform == 'win32':
-        (bin_dir / 'claude.cmd').write_text(f'@"{sys.executable}" "%~dp0claude_stub.py" %*\r\n')
+        (bin_dir / 'claude_stub.js').write_text(STUB_JS)
+        (bin_dir / 'claude.cmd').write_text('@"%~dp0\\claude_stub.js" %*\r\n')
     else:
+        (bin_dir / 'claude_stub.py').write_text(STUB)
         stub = bin_dir / 'claude'
         stub.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{bin_dir / "claude_stub.py"}" "$@"\n')
         stub.chmod(0o755)
     monkeypatch.setenv('PATH', str(bin_dir) + os.pathsep + os.environ['PATH'])
     return {'profiles': profiles, 'claude_home': claude_home, 'tmp': tmp_path}
+
+
+@pytest.fixture
+def windows(tmp_path, monkeypatch):
+    """Resolve programs as Windows does, from inside a cloned repo that ships its own claude.bat."""
+    monkeypatch.setattr(sys, 'platform', 'win32')
+    monkeypatch.setenv('PATHEXT', '.COM;.EXE;.BAT;.CMD')
+    repo = tmp_path / 'untrusted-repo'
+    repo.mkdir()
+    (repo / 'claude.bat').write_text('@calc.exe\r\n')
+    (repo / 'node.exe').write_text('')
+    monkeypatch.chdir(repo)
+    return tmp_path
 
 
 def test__run__launches_claude_with_the_profiles_config_dir(machine, capfd):
@@ -104,6 +158,44 @@ def test__run__refuses_the_profile_cc_use_has_loaded(machine, capfd):
     with pytest.raises(cc_run.ProfileError, match='loaded into the default login'):
         cc_run.run('work', [])
     assert capfd.readouterr().out == ''
+
+
+@pytest.mark.parametrize('action', ['login', 'logout'])
+def test__run__default_refuses_to_log_in_or_out_while_a_profile_is_loaded(machine, capfd, action):
+    # Arrange: the default slot holds work's only live login.
+    (machine['profiles'] / 'work').mkdir()
+    (machine['profiles'] / '.loaded').write_text('work\n')
+
+    # Act / Assert
+    with pytest.raises(cc_run.ProfileError, match='cc-use default'):
+        cc_run.run('default', ['auth', action])
+    assert capfd.readouterr().out == ''
+
+
+def test__main__login_default_refuses_while_a_profile_is_loaded(machine, capfd):
+    # Arrange
+    (machine['profiles'] / 'work').mkdir()
+    (machine['profiles'] / '.loaded').write_text('work\n')
+
+    # Act
+    code = cc_run.main(['login', 'default'])
+
+    # Assert
+    assert code == 1
+    assert 'cc-use default' in capfd.readouterr().err
+
+
+def test__run__default_runs_other_commands_while_a_profile_is_loaded(machine, capfd):
+    # Arrange
+    (machine['profiles'] / 'work').mkdir()
+    (machine['profiles'] / '.loaded').write_text('work\n')
+
+    # Act
+    code = cc_run.run('default', ['auth', 'status'])
+
+    # Assert
+    assert code == 0
+    assert _seen(capfd)['args'] == ['auth', 'status']
 
 
 @pytest.mark.parametrize(
@@ -255,6 +347,144 @@ def test__run__says_so_when_claude_is_not_installed(machine, monkeypatch):
     # Act / Assert
     with pytest.raises(cc_run.ProfileError, match='claude is not on PATH'):
         cc_run.run('work', [])
+
+
+def test__run__drops_login_overrides_for_a_named_profile(machine, capfd, monkeypatch):
+    # Arrange: any of these would run the profile on that credential instead of its own login.
+    (machine['profiles'] / 'work').mkdir()
+    for name, value in LOGIN_ENV.items():
+        monkeypatch.setenv(name, value)
+
+    # Act
+    cc_run.run('work', ['-p', 'hi'])
+
+    # Assert
+    assert _seen(capfd)['login_env'] == []
+
+
+def test__run__default_keeps_login_overrides(machine, capfd, monkeypatch):
+    # Arrange
+    for name, value in LOGIN_ENV.items():
+        monkeypatch.setenv(name, value)
+
+    # Act
+    cc_run.run('default', ['--version'])
+
+    # Assert
+    assert _seen(capfd)['login_env'] == sorted(LOGIN_ENV)
+
+
+def test__run__passes_cmd_syntax_through_to_claude_as_text(machine, capfd):
+    # Arrange: through cmd.exe, & would start another command and %PATH% would expand.
+    (machine['profiles'] / 'work').mkdir()
+    args = ['-p', 'a" & echo pwned & "b', '%PATH%']
+
+    # Act
+    cc_run.run('work', args)
+
+    # Assert
+    assert _seen(capfd)['args'] == args
+
+
+def test__claude_command__never_runs_a_claude_from_the_current_directory(windows, monkeypatch):
+    # Arrange
+    installed = windows / 'bin' / 'claude.exe'
+    installed.parent.mkdir()
+    installed.write_text('')
+    monkeypatch.setenv('PATH', str(installed.parent))
+
+    # Act
+    command = cc_run.claude_command()
+
+    # Assert
+    assert command == [str(installed)]
+
+
+def test__claude_command__skips_empty_and_relative_path_entries(windows, monkeypatch):
+    # Arrange: each of these would resolve against the current directory.
+    (windows / 'untrusted-repo' / 'bin').mkdir()
+    (windows / 'untrusted-repo' / 'bin' / 'claude.exe').write_text('')
+    installed = windows / 'bin' / 'claude.exe'
+    installed.parent.mkdir()
+    installed.write_text('')
+    monkeypatch.setenv('PATH', os.pathsep.join(['', '.', 'bin', str(installed.parent)]))
+
+    # Act
+    command = cc_run.claude_command()
+
+    # Assert
+    assert command == [str(installed)]
+
+
+@pytest.mark.parametrize('shim', [NPM_SHIM, OLD_NPM_SHIM], ids=['npm7+', 'npm6'])
+def test__claude_command__runs_an_npm_shims_script_with_the_node_beside_it(windows, monkeypatch, shim):
+    # Arrange
+    npm = windows / 'npm'
+    script = npm / 'node_modules' / '@anthropic-ai' / 'claude-code' / 'cli.js'
+    script.parent.mkdir(parents=True)
+    script.write_text('')
+    (npm / 'node.exe').write_text('')
+    (npm / 'claude.cmd').write_text(shim)
+    monkeypatch.setenv('PATH', str(npm))
+
+    # Act
+    command = cc_run.claude_command()
+
+    # Assert
+    assert command == [str(npm / 'node.exe'), str(script)]
+
+
+def test__claude_command__runs_an_npm_shims_script_with_node_from_path(windows, monkeypatch):
+    # Arrange: no node.exe beside the shim, and the one in the current directory must not count.
+    npm = windows / 'npm'
+    script = npm / 'node_modules' / '@anthropic-ai' / 'claude-code' / 'cli.js'
+    script.parent.mkdir(parents=True)
+    script.write_text('')
+    (npm / 'claude.cmd').write_text(NPM_SHIM)
+    node = windows / 'nodejs' / 'node.exe'
+    node.parent.mkdir()
+    node.write_text('')
+    monkeypatch.setenv('PATH', os.pathsep.join([str(npm), str(node.parent)]))
+
+    # Act
+    command = cc_run.claude_command()
+
+    # Assert
+    assert command == [str(node), str(script)]
+
+
+def test__claude_command__runs_an_npm_shims_exe_directly(windows, monkeypatch):
+    # Arrange
+    npm = windows / 'npm'
+    exe = npm / 'node_modules' / '@anthropic-ai' / 'claude-code' / 'bin' / 'claude.exe'
+    exe.parent.mkdir(parents=True)
+    exe.write_text('')
+    (npm / 'claude.cmd').write_text(NPM_SHIM.replace('"%_prog%"  ', '').replace('cli.js', 'bin\\claude.exe'))
+    monkeypatch.setenv('PATH', str(npm))
+
+    # Act
+    command = cc_run.claude_command()
+
+    # Assert
+    assert command == [str(exe)]
+
+
+@pytest.mark.parametrize(
+    'shim',
+    ['@echo off\r\ncalc.exe %*\r\n', '@"%~dp0\\claude_stub.py" %*\r\n', NPM_SHIM],
+    ids=['no-target', 'not-exe-or-js', 'missing-target'],
+)
+def test__claude_command__refuses_a_shim_it_cannot_read(windows, monkeypatch, shim):
+    # Arrange: running it through cmd.exe instead would let argument text run commands.
+    npm = windows / 'npm'
+    npm.mkdir()
+    (npm / 'claude_stub.py').write_text('')
+    (npm / 'claude.cmd').write_text(shim)
+    monkeypatch.setenv('PATH', str(npm))
+
+    # Act / Assert
+    with pytest.raises(cc_run.ProfileError, match='claude.cmd'):
+        cc_run.claude_command()
 
 
 def _seen(capfd) -> dict:

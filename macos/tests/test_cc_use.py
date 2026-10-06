@@ -32,6 +32,7 @@ def machine(tmp_path, monkeypatch):
 
     monkeypatch.setattr(cc_use, 'PROFILES_DIR', profiles)
     monkeypatch.setattr(cc_use, 'LOADED_FILE', profiles / '.loaded')
+    monkeypatch.setattr(cc_use, 'LOADED_FINGERPRINT_FILE', profiles / '.loaded-fingerprint')
     monkeypatch.setattr(cc_use, 'HOME_ACCOUNT_FILE', profiles / '.home-account.json')
     monkeypatch.setattr(cc_use, 'GLOBAL_CONFIG', global_config)
     monkeypatch.setattr(cc_use, 'OAUTH_REFRESH_LOCK', tmp_path / '.claude' / '.oauth_refresh.lock')
@@ -191,6 +192,20 @@ def test__load__refuses_a_profile_with_a_running_session(machine):
     assert machine['keychain'][cc_use.DEFAULT_SERVICE] == HOME_SECRET
 
 
+def test__load__refuses_a_login_too_large_to_write_through_stdin_and_changes_nothing(machine):
+    # Arrange: a login past `security -i`'s line limit, as many MCP sign-ins beside it would make.
+    large = json.dumps({'claudeAiOauth': {'accessToken': 'work-at', 'refreshToken': 'work-rt'}, 'pad': 'x' * 4096})
+    machine['keychain'][cc_use._owner_service('work')] = large
+    before = dict(machine['keychain'])
+
+    # Act / Assert
+    with pytest.raises(cc_use.SwapError, match='too large'):
+        cc_use.load('work')
+    assert machine['keychain'] == before
+    assert cc_use.loaded_profile() is None
+    assert not cc_use.HOME_ACCOUNT_FILE.exists()
+
+
 def test__load__ignores_session_files_of_dead_processes(machine):
     # Arrange
     sessions = machine['profiles'] / 'work' / 'sessions'
@@ -212,11 +227,12 @@ def test__load__refuses_when_the_slot_holds_an_unexpected_account(machine):
     # Act / Assert
     with pytest.raises(cc_use.SwapError, match='cc-use recorded work'):
         cc_use.load(None)
-    assert machine['keychain'][cc_use._owner_service('work')] == WORK_SECRET
+    assert cc_use._owner_service('work') not in machine['keychain']
 
 
 def test__verify_owner__offline_accepts_an_unchanged_login(machine):
-    # Arrange: identity cannot be resolved, but the refresh token matches the stored copy.
+    # Arrange: identity cannot be resolved, but the refresh token matches the one cc-use recorded.
+    cc_use.load('work')
     machine['identities'].clear()
 
     # Act / Assert: no exception
@@ -225,6 +241,7 @@ def test__verify_owner__offline_accepts_an_unchanged_login(machine):
 
 def test__verify_owner__offline_refuses_a_changed_login(machine):
     # Arrange
+    cc_use.load('work')
     machine['identities'].clear()
     changed = json.dumps({'claudeAiOauth': {'accessToken': 'x', 'refreshToken': 'other'}})
 
@@ -329,7 +346,7 @@ def test__load__failed_config_write_puts_the_slot_back(machine, monkeypatch):
 
 def test__load__failed_loaded_write_puts_the_slot_and_config_back(machine, monkeypatch):
     # Arrange: recording .loaded is the last write, so the slot and the config already changed.
-    def write_loaded(profile):
+    def write_loaded(profile, credentials):
         if profile is not None:
             raise KeyboardInterrupt
 
@@ -538,6 +555,17 @@ def test__security__reports_a_missing_binary_as_a_swap_error(tmp_path, monkeypat
         cc_use._security(['help'])
 
 
+def test__keychain_set__never_passes_a_large_secret_as_an_argument(monkeypatch):
+    # Arrange: arguments are readable by every local user through ps.
+    calls = []
+    monkeypatch.setattr(cc_use, '_security', lambda args, stdin=None: calls.append(args))
+
+    # Act / Assert
+    with pytest.raises(cc_use.SwapError, match='too large'):
+        cc_use._keychain_set(cc_use.DEFAULT_SERVICE, 'x' * 4096)
+    assert calls == []
+
+
 def test__status__treats_a_null_oauth_account_as_no_account(machine):
     # Arrange
     machine['global_config'].write_text(json.dumps({'oauthAccount': None}))
@@ -706,7 +734,7 @@ def test__load__refuses_when_a_session_refreshes_the_slot_before_the_lock(machin
 
 def test__load__failed_loaded_write_leaves_no_partial_record(machine, monkeypatch):
     # Arrange: the disk fills while .loaded is written, leaving a truncated name behind.
-    def write_loaded(profile):
+    def write_loaded(profile, credentials):
         if profile is not None:
             cc_use.LOADED_FILE.write_text(profile[:2])
             raise OSError(28, 'No space left on device')
@@ -831,7 +859,7 @@ def test__load__attempts_every_restore_when_one_fails(machine, monkeypatch):
             raise cc_use.SwapError('Keychain write failed')
         keychain[service] = secret
 
-    def write_loaded(profile):
+    def write_loaded(profile, credentials):
         if profile is not None:
             raise OSError(28, 'No space left on device')
         cc_use.LOADED_FILE.unlink(missing_ok=True)
@@ -873,3 +901,228 @@ def test__forget__says_so_when_nothing_is_stashed(machine):
     # Assert: it must not claim to have deleted a copy that was never there.
     assert 'deleted' not in message
     assert 'nothing' in message
+
+
+def _add_other_profile(machine):
+    other_secret = json.dumps({'claudeAiOauth': {'accessToken': 'other-at', 'refreshToken': 'other-rt'}})
+    (machine['profiles'] / 'other').mkdir()
+    (machine['profiles'] / 'other' / '.claude.json').write_text(
+        json.dumps({'oauthAccount': {'accountUuid': 'uuid-other', 'emailAddress': 'other@example.com'}})
+    )
+    machine['keychain'][cc_use._owner_service('other')] = other_secret
+    machine['identities']['other-at'] = 'uuid-other'
+    return other_secret
+
+
+def _fail_config_write(machine, monkeypatch):
+    real_write_json = cc_use._write_json
+
+    def write_json(path, data):
+        if path == machine['global_config']:
+            raise OSError(28, 'No space left on device')
+        real_write_json(path, data)
+
+    monkeypatch.setattr(cc_use, '_write_json', write_json)
+
+
+def test__load__moves_the_login_out_of_the_profiles_own_item(machine):
+    # Act
+    cc_use.load('work')
+
+    # Assert: a session started on work's own copy would otherwise strand the slot's.
+    assert cc_use._owner_service('work') not in machine['keychain']
+    assert machine['keychain'][cc_use.DEFAULT_SERVICE] == WORK_SECRET
+
+
+def test__load__failed_config_write_gives_the_profile_its_login_back(machine, monkeypatch):
+    # Arrange
+    _fail_config_write(machine, monkeypatch)
+
+    # Act
+    with pytest.raises(OSError):
+        cc_use.load('work')
+
+    # Assert
+    assert machine['keychain'][cc_use._owner_service('work')] == WORK_SECRET
+    assert machine['keychain'][cc_use.DEFAULT_SERVICE] == HOME_SECRET
+
+
+def test__load__rollback_leaves_the_slot_alone_when_the_profile_item_cannot_be_restored(machine, monkeypatch):
+    # Arrange: the config write fails, and so does putting work's login back in its own item.
+    _fail_config_write(machine, monkeypatch)
+    keychain = machine['keychain']
+    work_item = cc_use._owner_service('work')
+
+    def keychain_set(service, secret):
+        if service == work_item:
+            raise cc_use.SwapError('Keychain write failed')
+        keychain[service] = secret
+
+    monkeypatch.setattr(cc_use, '_keychain_set', keychain_set)
+
+    # Act
+    with pytest.raises(OSError):
+        cc_use.load('work')
+
+    # Assert: the slot keeps work's only copy rather than being overwritten.
+    assert keychain[cc_use.DEFAULT_SERVICE] == WORK_SECRET
+    assert keychain[cc_use.HOME_STASH_SERVICE] == HOME_SECRET
+
+
+def test__load__sigterm_after_the_move_gives_the_profile_its_login_back(machine, monkeypatch):
+    # Arrange: SIGTERM arrives right after work's own item is deleted.
+    keychain = machine['keychain']
+    work_item = cc_use._owner_service('work')
+
+    def keychain_delete(service):
+        keychain.pop(service, None)
+        if service == work_item:
+            os.kill(os.getpid(), signal.SIGTERM)
+
+    monkeypatch.setattr(cc_use, '_keychain_delete', keychain_delete)
+
+    # Act
+    with pytest.raises(cc_use._Terminated):
+        cc_use.load('work')
+
+    # Assert
+    assert keychain[work_item] == WORK_SECRET
+    assert keychain[cc_use.DEFAULT_SERVICE] == HOME_SECRET
+    assert cc_use.loaded_profile() is None
+
+
+def test__load__failed_swap_between_profiles_leaves_one_copy_of_the_loaded_login(machine, monkeypatch):
+    # Arrange: work is loaded, and the swap to other fails after work's login was written back.
+    other_secret = _add_other_profile(machine)
+    cc_use.load('work')
+    _fail_config_write(machine, monkeypatch)
+
+    # Act
+    with pytest.raises(OSError):
+        cc_use.load('other')
+
+    # Assert: work's login is back in the slot only, and other keeps its own.
+    keychain = machine['keychain']
+    assert keychain[cc_use.DEFAULT_SERVICE] == WORK_SECRET
+    assert cc_use._owner_service('work') not in keychain
+    assert keychain[cc_use._owner_service('other')] == other_secret
+    assert cc_use.loaded_profile() == 'work'
+
+
+def test__load__switching_between_profiles_moves_each_login(machine):
+    # Arrange
+    other_secret = _add_other_profile(machine)
+    cc_use.load('work')
+
+    # Act
+    cc_use.load('other')
+
+    # Assert
+    keychain = machine['keychain']
+    assert keychain[cc_use.DEFAULT_SERVICE] == other_secret
+    assert cc_use._owner_service('other') not in keychain
+    assert keychain[cc_use._owner_service('work')] == WORK_SECRET
+
+
+def test__load__records_a_fingerprint_of_the_moved_login_beside_loaded(machine):
+    # Act
+    cc_use.load('work')
+
+    # Assert: a hash of the refresh token, never the token, and .loaded stays a plain name.
+    fingerprint = (machine['profiles'] / '.loaded-fingerprint').read_text().strip()
+    assert fingerprint == hashlib.sha256(b'work-rt').hexdigest()
+    assert (machine['profiles'] / '.loaded').read_text() == 'work\n'
+
+
+def test__load__default_removes_the_fingerprint_with_loaded(machine):
+    # Arrange
+    cc_use.load('work')
+
+    # Act
+    cc_use.load(None)
+
+    # Assert
+    assert not (machine['profiles'] / '.loaded-fingerprint').exists()
+
+
+def test__load__failed_loaded_write_removes_the_fingerprint(machine, monkeypatch):
+    # Arrange: .loaded cannot be written, after the fingerprint beside it was.
+    monkeypatch.setattr(cc_use, 'LOADED_FILE', machine['profiles'] / 'missing-dir' / '.loaded')
+
+    # Act
+    with pytest.raises(OSError):
+        cc_use.load('work')
+
+    # Assert
+    assert not (machine['profiles'] / '.loaded-fingerprint').exists()
+    assert machine['keychain'][cc_use._owner_service('work')] == WORK_SECRET
+
+
+def test__load__default_offline_accepts_the_login_it_fingerprinted(machine):
+    # Arrange: work's own item is gone, but the slot still holds the login cc-use moved there.
+    cc_use.load('work')
+    machine['identities'].clear()
+
+    # Act
+    cc_use.load(None)
+
+    # Assert
+    assert machine['keychain'][cc_use._owner_service('work')] == WORK_SECRET
+    assert machine['keychain'][cc_use.DEFAULT_SERVICE] == HOME_SECRET
+
+
+def test__load__default_offline_refuses_when_a_killed_swap_left_the_owner_its_login_back(machine):
+    # Arrange: work -> personal was killed after the fingerprint write, before .loaded: work's
+    # item holds work's login again, and the slot and the fingerprint are personal's.
+    cc_use.load('work')
+    personal = json.dumps({'claudeAiOauth': {'accessToken': 'personal-at', 'refreshToken': 'personal-rt'}})
+    machine['keychain'][cc_use._owner_service('work')] = WORK_SECRET
+    machine['keychain'][cc_use.DEFAULT_SERVICE] = personal
+    cc_use._write_loaded('work', personal)
+    machine['identities'].clear()
+
+    # Act / Assert: writing the slot back to work would leave work's login nowhere.
+    with pytest.raises(cc_use.UnconfirmedError):
+        cc_use.load(None)
+    assert machine['keychain'][cc_use._owner_service('work')] == WORK_SECRET
+
+
+def test__load__default_offline_refuses_a_login_that_does_not_match_the_fingerprint(machine):
+    # Arrange
+    cc_use.load('work')
+    machine['identities'].clear()
+    rotated = json.dumps({'claudeAiOauth': {'accessToken': 'work-at-2', 'refreshToken': 'work-rt-2'}})
+    machine['keychain'][cc_use.DEFAULT_SERVICE] = rotated
+
+    # Act / Assert
+    with pytest.raises(cc_use.UnconfirmedError, match='could not confirm'):
+        cc_use.load(None)
+    assert machine['keychain'][cc_use.DEFAULT_SERVICE] == rotated
+    assert cc_use._owner_service('work') not in machine['keychain']
+
+
+def test__load__default_offline_refuses_a_loaded_profile_with_no_fingerprint(machine):
+    # Arrange: work was loaded but its fingerprint record is missing.
+    cc_use.load('work')
+    (machine['profiles'] / '.loaded-fingerprint').unlink()
+    machine['identities'].clear()
+
+    # Act / Assert
+    with pytest.raises(cc_use.UnconfirmedError, match='could not confirm'):
+        cc_use.load(None)
+    assert machine['keychain'][cc_use.DEFAULT_SERVICE] == WORK_SECRET
+
+
+def test__load__default_finishes_a_swap_killed_after_the_move(machine):
+    # Arrange: the killed swap had already deleted work's own item, so the slot is its only copy.
+    _killed_mid_swap(machine, HOME_ACCOUNT)
+    del machine['keychain'][cc_use._owner_service('work')]
+
+    # Act
+    cc_use.load(None)
+
+    # Assert
+    keychain = machine['keychain']
+    assert keychain[cc_use._owner_service('work')] == WORK_SECRET
+    assert keychain[cc_use.DEFAULT_SERVICE] == HOME_SECRET
+    assert cc_use.loaded_profile() is None
