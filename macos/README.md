@@ -16,7 +16,7 @@ Shell commands (zsh):
 |---|---|
 | `cc-add <profile>` | Create a profile and log it in |
 | `cc <profile> [args]` | Run Claude Code as that account (`cc default` runs your normal login) |
-| `cc-login <profile>` | Log a profile in again. The sign-in page opens in a new private browser window on a throwaway profile (Google Chrome, or the browser `CC_LOGIN_BROWSER` names), so it can't pick up whichever account your browser, or an earlier login, is signed into |
+| `cc-login <profile>` | Log a profile in again. The sign-in page opens in a private browser window on your own browser profile (Google Chrome, or the browser `CC_LOGIN_BROWSER` names), so your saved passwords fill but it can't pick up whichever account your browser is signed into. Private windows share one set of cookies, so it refuses while one is already open: close them first. Firefox gets a throwaway profile instead |
 | `ccusage-all` | One table of session and weekly usage for every account, soonest reset first |
 | `cc-use <profile>` | macOS: put that account's login in the default slot, so VS Code and plain `claude` run as it. `cc-use default` puts yours back |
 
@@ -44,8 +44,9 @@ has loaded into your default login.
 - Claude Code (the `claude` CLI) with your normal account already logged in
 - zsh and Python 3.9+. On macOS, zsh is the default shell and `/usr/bin/python3` is enough
   once the Command Line Tools are installed.
-- macOS for `cc-use` and for `cc-login`'s throwaway browser window. The rest only needs zsh, so it
-  should work on Linux, but it has only been tested on macOS.
+- macOS for `cc-use` and for `cc-login`'s private browser window. The first `cc-login` asks to let
+  your terminal control the browser, which is how it checks no private window is open. The rest
+  only needs zsh, so it should work on Linux, but it has only been tested on macOS.
 - Google Chrome for that window, or set `CC_LOGIN_BROWSER` to the app name of Firefox or
   another Chromium-based browser (`Microsoft Edge`, `Brave Browser`). Safari has no
   command-line private-window option, so it can't be used.
