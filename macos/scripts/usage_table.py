@@ -5,7 +5,8 @@ The default account uses no CLAUDE_CONFIG_DIR (its config is ~/.claude.json at t
 root). Every other account is a directory under $CLAUDE_PROFILES (default
 ~/.claude-profiles). The default login earns a row of its own only when it holds an account
 no named profile covers. A star marks the account this session runs as, and `[default]`
-the profile cc-use has loaded into the default login.
+the profile cc-use has loaded into the default login. LOGIN EXPIRES names a login that has
+expired or soon will, since every run on it then fails until it is logged in again.
 """
 
 from __future__ import annotations
@@ -19,6 +20,8 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+from cc_use import SwapError, stored_oauth
+
 PROFILES_DIR = Path(os.environ.get('CLAUDE_PROFILES') or Path.home() / '.claude-profiles').expanduser()
 RESERVED_NAMES = {'bin', 'default'}  # never account profiles; neither is anything starting with . or _
 MAX_PARALLEL = 6
@@ -28,6 +31,8 @@ SESSION = re.compile(r'Current session:\s*(\d+)%')
 WEEK_ALL = re.compile(r'Current week \(all models\):\s*(\d+)%')
 WEEK_OTHER = re.compile(r'Current week \((?!all models)([^)]+)\):\s*(\d+)%')
 WEEK_RESET = re.compile(r'Current week \(all models\).*?resets ([^(\n]+)')
+# A login this close to its fixed expiry is flagged, leaving time to re-auth before it lapses.
+LOGIN_WARNING = timedelta(days=3)
 
 
 def main() -> None:
@@ -76,6 +81,7 @@ def _probe(name: str, config_dir: Path | None) -> dict:
         'resets': '',
         'reset_at': None,
         'note': '',
+        'login': _login_expiry(config_dir),
     }
     status = _claude(['auth', 'status'], config_dir)
     if not _logged_in(status):
@@ -160,6 +166,33 @@ def _reset_days(date_part: str, now: datetime) -> list[date]:
     return days
 
 
+def _login_expiry(config_dir: Path | None) -> str:
+    """When the login stops refreshing, if that is past or within LOGIN_WARNING; '' otherwise.
+
+    Refreshing never moves this date, and `claude auth status` still says logged in after it.
+    """
+    try:
+        expires_ms = stored_oauth(config_dir).get('refreshTokenExpiresAt')
+    except SwapError:  # a locked or unresponsive Keychain; the usage probe still runs
+        return 'unknown'
+    if not isinstance(expires_ms, (int, float)):
+        return ''
+    expires_at = datetime.fromtimestamp(expires_ms / 1000)
+    now = datetime.now()
+    if expires_at <= now:
+        return f'expired {expires_at:%b} {expires_at.day}'
+    if expires_at - now <= LOGIN_WARNING:
+        return f'{expires_at:%A} at {_clock(expires_at)}'
+    return ''
+
+
+def _clock(moment: datetime) -> str:
+    """'8pm' or '10:57pm', the way /usage prints a reset time."""
+    hour = moment.hour % 12 or 12
+    minutes = f':{moment.minute:02d}' if moment.minute else ''
+    return f'{hour}{minutes}{"am" if moment.hour < 12 else "pm"}'
+
+
 def _account_email(config_dir: Path | None) -> str | None:
     path = (config_dir / '.claude.json') if config_dir else (Path.home() / '.claude.json')
     try:
@@ -212,7 +245,7 @@ def _claude(args: list[str], config_dir: Path | None) -> str:
 
 
 def _render(rows: list[dict]) -> None:
-    headers = ('ACCOUNT', 'PROFILE', 'SESSION', 'WEEK', 'OTHER LIMITS', 'WEEK RESETS')
+    headers = ('ACCOUNT', 'PROFILE', 'SESSION', 'WEEK', 'OTHER LIMITS', 'WEEK RESETS', 'LOGIN EXPIRES')
     loaded = _loaded_profile()
     table = [headers] + [
         (
@@ -222,6 +255,7 @@ def _render(rows: list[dict]) -> None:
             '' if r['note'] else (f'{r["week"]}%' if r['week'] is not None else '-'),
             r['other'],
             r['resets'],
+            r['login'],
         )
         for r in rows
     ]

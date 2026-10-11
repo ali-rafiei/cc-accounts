@@ -225,6 +225,12 @@ def forget() -> str:
     return 'deleted the stashed copy of your login; your default login is untouched'
 
 
+def stored_oauth(config_dir: Path | None) -> dict:
+    """The OAuth record Claude Code runs a config dir on (None: the default slot); {} when it has no login."""
+    credentials = _keychain_get(_credentials_service(config_dir))
+    return {} if credentials is None else _oauth(credentials)
+
+
 def _interrupted_swap_owner(slot: str, stash: str) -> str | None:
     """The profile a swap killed before writing .loaded left in the slot; None when the slot holds your own login."""
     identity = _fetch_identity(_oauth(slot).get('accessToken'))
@@ -283,8 +289,15 @@ def _owner_service(profile: str | None) -> str:
     """Where a login lives while it is out of the slot: its profile's own item, or the stash."""
     if profile is None:
         return HOME_STASH_SERVICE
-    config_dir = unicodedata.normalize('NFC', str(PROFILES_DIR / profile))  # Claude Code hashes the NFC form
-    digest = hashlib.sha256(config_dir.encode()).hexdigest()[:8]
+    return _credentials_service(PROFILES_DIR / profile)
+
+
+def _credentials_service(config_dir: Path | None) -> str:
+    """The Keychain item Claude Code keeps a config dir's login in; None is the default slot."""
+    if config_dir is None:
+        return DEFAULT_SERVICE
+    normalized = unicodedata.normalize('NFC', str(config_dir))  # Claude Code hashes the NFC form
+    digest = hashlib.sha256(normalized.encode()).hexdigest()[:8]
     return f'{DEFAULT_SERVICE}-{digest}'
 
 
