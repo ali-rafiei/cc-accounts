@@ -16,6 +16,8 @@ ENV_STUB = (
     'claude() { print -r -- "CONFIG=$(printenv CLAUDE_CONFIG_DIR) LOGIN=$(env | grep -E '
     "'^(ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|CLAUDE_CODE_OAUTH_TOKEN)=' | cut -d= -f1 | sort | tr '\\n' ' ')\"; }"
 )
+# Stands in for osascript reporting no private browser window open, so cc-login goes ahead.
+NO_PRIVATE_WINDOWS = 'osascript() { print 0; }'
 LOGIN_OVERRIDES = {'ANTHROPIC_API_KEY': 'sk-ant', 'ANTHROPIC_AUTH_TOKEN': 'bearer', 'CLAUDE_CODE_OAUTH_TOKEN': 'oauth'}
 
 
@@ -426,19 +428,29 @@ def test__open__lowercase_browser_name_still_gets_its_private_flag(tmp_path, bro
     assert args[-1] == 'https://example.com/oauth'
 
 
-@pytest.mark.parametrize(('browser', 'profile_flag'), [('Google Chrome', '--user-data-dir='), ('Firefox', '-profile')])
-def test__open__gives_each_login_its_own_browser_profile(tmp_path, browser, profile_flag):
-    # Arrange: private windows share one cookie jar, so only a fresh profile is a clean login.
+def test__open__gives_each_firefox_login_its_own_browser_profile(tmp_path):
+    # Arrange: private windows share one cookie jar, and cc-login cannot see Firefox's to check it is empty.
     shim = _open_shim(tmp_path)
-    env = {'CC_LOGIN_BROWSER': browser, 'TMPDIR': str(tmp_path)}
+    env = {'CC_LOGIN_BROWSER': 'Firefox', 'TMPDIR': str(tmp_path)}
 
     # Act
     runs = [_run(['sh', str(shim), 'https://example.com/oauth'], tmp_path, extra_env=env) for _ in range(2)]
 
     # Assert
-    profiles = [_profile_dir(run.stdout.splitlines(), profile_flag) for run in runs]
+    profiles = [_profile_dir(run.stdout.splitlines(), '-profile') for run in runs]
     assert profiles[0] != profiles[1]
     assert all(Path(profile).is_dir() for profile in profiles)
+
+
+def test__open__opens_chrome_incognito_on_the_users_own_profile_so_saved_passwords_fill(tmp_path):
+    # Arrange
+    shim = _open_shim(tmp_path)
+
+    # Act
+    out = _run(['sh', str(shim), 'https://example.com/oauth'], tmp_path)
+
+    # Assert
+    assert out.stdout.splitlines() == ['-na', 'Google Chrome', '--args', '--incognito', 'https://example.com/oauth']
 
 
 def test__open__passes_a_non_url_through_to_the_real_open(tmp_path):
@@ -528,12 +540,14 @@ def test__ccusage_all__raw_skips_the_loaded_profiles_own_copy(home):
     assert f'CONFIG={home}/.claude-profiles/personal ARGS=-p /usage' in out
 
 
-def test__cc_login__puts_the_throwaway_browser_shim_first_on_path(home):
+def test__cc_login__puts_the_private_window_browser_shim_first_on_path(home):
     # Arrange
     (home / '.claude-profiles' / 'work').mkdir()
 
     # Act
-    out = _zsh('claude() { print -r -- "OPEN=$(whence -p open) ARGS=$*"; }; cc-login work', home)
+    out = _zsh(
+        f'{NO_PRIVATE_WINDOWS}; claude() {{ print -r -- "OPEN=$(whence -p open) ARGS=$*"; }}; cc-login work', home
+    )
 
     # Assert
     assert out == f'OPEN={home}/.claude-profiles/bin/open ARGS=auth login'
@@ -637,6 +651,71 @@ def test__cc__default_runs_other_commands_while_a_profile_is_loaded(home):
 
     # Assert
     assert out == 'CONFIG=none ARGS=auth status'
+
+
+@pytest.mark.skipif(os.uname().sysname != 'Darwin', reason='cc-login checks the browser only on macOS')
+def test__cc_login__refuses_while_a_private_window_is_open(home):
+    # Arrange: private windows share one cookie jar, so the sign-in would reuse that window's account.
+    (home / '.claude-profiles' / 'work').mkdir()
+
+    # Act
+    out = _run(
+        ['zsh', '-c', f'source "$HOME/.zshrc"; {CLAUDE_STUB}; osascript() {{ print 1; }}; cc-login work'],
+        home,
+        check=False,
+    )
+
+    # Assert
+    assert out.returncode == 1
+    assert 'close every private window in Google Chrome' in out.stdout
+    assert 'CONFIG=' not in out.stdout
+
+
+@pytest.mark.skipif(os.uname().sysname != 'Darwin', reason='cc-login checks the browser only on macOS')
+def test__cc_login__checks_the_browser_cc_login_browser_names(home):
+    # Arrange
+    (home / '.claude-profiles' / 'work').mkdir()
+    stub = 'osascript() { [[ "$*" == *\'application "Brave Browser"\'* ]] && print 1 || print 0; }'
+
+    # Act
+    out = _run(
+        ['zsh', '-c', f'source "$HOME/.zshrc"; {CLAUDE_STUB}; {stub}; cc-login work'],
+        home,
+        check=False,
+        extra_env={'CC_LOGIN_BROWSER': 'Brave Browser'},
+    )
+
+    # Assert
+    assert out.returncode == 1
+    assert 'close every private window in Brave Browser' in out.stdout
+
+
+@pytest.mark.skipif(os.uname().sysname != 'Darwin', reason='cc-login checks the browser only on macOS')
+def test__cc_login__refuses_when_it_cannot_check_the_browser(home):
+    # Arrange: macOS denies the check until the terminal may control the browser.
+    (home / '.claude-profiles' / 'work').mkdir()
+    stub = 'osascript() { print -u2 "Not authorized to send Apple events to Google Chrome. (-1743)"; return 1; }'
+
+    # Act
+    out = _run(['zsh', '-c', f'source "$HOME/.zshrc"; {CLAUDE_STUB}; {stub}; cc-login work'], home, check=False)
+
+    # Assert
+    assert out.returncode == 1
+    assert 'could not check Google Chrome for private windows' in out.stdout
+    assert '(-1743)' in out.stdout
+    assert 'CONFIG=' not in out.stdout
+
+
+@pytest.mark.skipif(os.uname().sysname != 'Darwin', reason='cc-login checks the browser only on macOS')
+def test__cc_login__does_not_check_firefox_which_gets_a_fresh_profile(home):
+    # Arrange
+    (home / '.claude-profiles' / 'work').mkdir()
+
+    # Act
+    out = _zsh('osascript() { print 1; }; cc-login work', home, extra_env={'CC_LOGIN_BROWSER': 'Firefox'})
+
+    # Assert
+    assert out == f'CONFIG={home}/.claude-profiles/work ARGS=auth login'
 
 
 def _zsh(command: str, home: Path, check: bool = True, extra_env: dict[str, str] | None = None) -> str:

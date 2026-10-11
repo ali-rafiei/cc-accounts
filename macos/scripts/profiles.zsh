@@ -66,12 +66,13 @@ cc-add() {
 }
 
 # Log a profile in (or re-auth it): `cc-login work`
-# On macOS the OAuth page is forced into a fresh private browser window (via the `open`
-# shim in bin/, put on PATH for this call only), so it never reuses whichever account the
-# browser is already signed into. CC_LOGIN_BROWSER picks the browser.
+# On macOS the OAuth page is forced into a private browser window (via the `open` shim in
+# bin/, put on PATH for this call only), so it never reuses whichever account the browser is
+# already signed into. CC_LOGIN_BROWSER picks the browser.
 cc-login() {
   emulate -L zsh
   local base="$(_cc_base)"
+  _cc_no_private_windows || return 1
   PATH="$base/bin:$PATH" cc "$1" auth login
 }
 
@@ -129,6 +130,29 @@ _cc_loaded() {
   emulate -L zsh
   local file="$(_cc_base)/.loaded"
   [[ -f "$file" ]] && print -r -- "$(<"$file")"
+}
+
+# bin/open signs in through a private window on your own browser profile, and those windows
+# share one cookie jar: with one already open, the sign-in would reuse its account.
+_cc_no_private_windows() {
+  emulate -L zsh
+  [[ "$OSTYPE" == darwin* ]] || return 0
+  local browser="${CC_LOGIN_BROWSER:-Google Chrome}" app count
+  [[ "${browser:l}" == firefox* ]] && return 0  # bin/open gives Firefox a throwaway profile instead
+  app="${${browser//\\/\\\\}//\"/\\\"}"  # quoted for an AppleScript string
+  count="$(osascript -e "if application \"$app\" is running then
+  tell application \"$app\" to count (windows whose mode is \"incognito\")
+else
+  0
+end if" 2>&1)"
+  if [[ $? -ne 0 || "$count" != <-> ]]; then
+    print -r -- "cc-login: could not check $browser for private windows ($count); allow your terminal to control $browser under System Settings > Privacy & Security > Automation"
+    return 1
+  fi
+  if (( count )); then
+    print -r -- "cc-login: close every private window in $browser first ($count open): they share one set of cookies, so this sign-in could reuse the account signed in there"
+    return 1
+  fi
 }
 
 # `claude -p /usage` on an account's own login (no config dir = the default), in a fresh empty
