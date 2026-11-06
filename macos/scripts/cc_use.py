@@ -154,14 +154,7 @@ def load(target: str | None) -> str:
                 f'{target} is not logged in (cc-login {target})' if target else 'no stashed login to restore'
             )
         incoming_account = _profile_account(target) if target else _read_json(HOME_ACCOUNT_FILE)
-        # Every write the swap or its rollback could make, checked before the first one happens.
-        for service, secret in (
-            (_owner_service(owner), current),
-            (DEFAULT_SERVICE, incoming),
-            (_owner_service(target), incoming),
-            (DEFAULT_SERVICE, current),
-        ):
-            _keychain_set_command(service, secret)
+        slot_incoming = _keep_mcp_oauth(incoming, current)
         config = _read_json(GLOBAL_CONFIG)
         # The record goes first: uninstall runs `forget` only when it exists, so no stash may outlive it.
         if owner is None:
@@ -174,14 +167,14 @@ def load(target: str | None) -> str:
         moved = config_written = False
         try:
             _keychain_set(_owner_service(owner), current)
-            _keychain_set(DEFAULT_SERVICE, incoming)
+            _keychain_set(DEFAULT_SERVICE, slot_incoming)
             # Moved, not copied: a session run on the profile's own copy would strand the slot's.
             if target is not None:
                 moved = True
                 _keychain_delete(_owner_service(target))
             _write_json(GLOBAL_CONFIG, {**config, 'oauthAccount': incoming_account})
             config_written = True
-            _write_loaded(target, incoming)
+            _write_loaded(target, slot_incoming)
         except BaseException:
             # Until the profile's item is back, the slot may hold its login's only copy.
             if not moved or _undo(_keychain_set, _owner_service(target), incoming):
@@ -425,6 +418,14 @@ def _write_loaded(profile: str | None, credentials: str) -> None:
     LOADED_FILE.write_text(profile + '\n')
 
 
+def _keep_mcp_oauth(incoming: str, current: str) -> str:
+    """`incoming` with the slot's MCP server sign-ins (mcpOAuth), so they stay when the account switches."""
+    mcp_oauth = json.loads(current).get('mcpOAuth')
+    if not mcp_oauth:
+        return incoming
+    return json.dumps({**json.loads(incoming), 'mcpOAuth': mcp_oauth})
+
+
 def _fingerprint(credentials: str) -> str | None:
     token = _oauth(credentials).get('refreshToken')
     return hashlib.sha256(token.encode()).hexdigest() if isinstance(token, str) and token else None
@@ -483,21 +484,17 @@ def _keychain_get(service: str) -> str | None:
 
 
 def _keychain_set(service: str, secret: str) -> None:
-    done = _security(['-i'], stdin=_keychain_set_command(service, secret))
+    """Write secret through `security -i`'s stdin, so it stays out of the process list. A login past
+    the stdin line limit (many MCP sign-ins) goes as an argument instead, as Claude Code itself writes
+    the same item past that limit."""
+    account, hex_secret = _keychain_account(), secret.encode().hex()
+    command = f'add-generic-password -U -a "{account}" -s "{service}" -X {hex_secret}\n'
+    if len(command.encode()) <= SECURITY_STDIN_LINE_LIMIT:
+        done = _security(['-i'], stdin=command)
+    else:
+        done = _security(['add-generic-password', '-U', '-a', account, '-s', service, '-X', hex_secret])
     if done.returncode != 0:
         raise SwapError(f'Keychain write of {service!r} failed (rc={done.returncode}): {done.stderr.strip()}')
-
-
-def _keychain_set_command(service: str, secret: str) -> str:
-    """The `security -i` line that writes secret. Past the line limit there is no safe way to write it:
-    as an argument, the token would be readable by every local user through ps."""
-    command = f'add-generic-password -U -a "{_keychain_account()}" -s "{service}" -X {secret.encode().hex()}\n'
-    if len(command.encode()) > SECURITY_STDIN_LINE_LIMIT:
-        raise SwapError(
-            f'the login for {service!r} is too large ({len(secret.encode())} bytes) to write through '
-            "`security`'s stdin, and as an argument its token would be visible to other processes"
-        )
-    return command
 
 
 def _keychain_delete(service: str) -> None:

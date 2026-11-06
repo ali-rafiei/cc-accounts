@@ -21,7 +21,7 @@ esac
 dest="${dest%/}"
 zshrc="${ZDOTDIR:-$HOME}/.zshrc"
 skills_dir="$HOME/.claude/skills"
-scripts=(profiles.zsh cc_use.py usage_table.py bin/open)
+scripts=(profiles.zsh cc_use.py usage_table.py mcp_gateway.py mcp_gateway_setup.sh bin/open)
 skills=(cc-usage cc-use cc-run)
 marker="# cc-accounts"
 if [[ "$dest" == "$HOME/.claude-profiles" ]]; then
@@ -48,7 +48,7 @@ install() {
   for file in "${scripts[@]}"; do
     copy_with_backup "$repo/scripts/$file" "$dest/$file"
   done
-  chmod +x "$dest/cc_use.py" "$dest/usage_table.py" "$dest/bin/open"
+  chmod +x "$dest/cc_use.py" "$dest/usage_table.py" "$dest/mcp_gateway.py" "$dest/mcp_gateway_setup.sh" "$dest/bin/open"
   if ! already_sourced; then
     printf '\n%s\n' "$source_line" >> "$zshrc"
     echo "added to $zshrc: $source_line"
@@ -80,6 +80,12 @@ uninstall() {
       echo "not uninstalling: cc-use's stash may hold the only copy of your login (reason above). Fix that, then rerun." >&2
       exit 1
     fi
+  fi
+  # Stop the MCP gateway first, or launchd keeps restarting a script that is about to be removed.
+  local agent="$HOME/Library/LaunchAgents/com.user.claude-mcp-gateway.plist"
+  if [[ -f "$agent" ]]; then
+    launchctl bootout "gui/$UID" "$agent" 2>/dev/null || true
+    rm -f "$agent"
   fi
   local file skill
   for file in "${scripts[@]}"; do

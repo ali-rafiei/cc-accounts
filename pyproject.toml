@@ -22,7 +22,7 @@ target-version = "py39"
 select = ["E", "F", "I", "B", "UP"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["cc_use", "cc_run", "usage_table"]
+known-first-party = ["cc_use", "cc_run", "mcp_gateway", "usage_table"]
 
 [tool.ruff.format]
 quote-style = "single"
