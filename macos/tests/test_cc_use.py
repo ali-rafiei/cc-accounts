@@ -165,6 +165,58 @@ def test__load__default_brings_back_mcp_sign_ins_made_while_a_profile_was_loaded
     assert cc_use.loaded_profile() is None
 
 
+def test__load__outgoing_login_leaves_the_slots_mcp_sign_ins_behind(machine):
+    # Arrange: one live copy of each MCP refresh token, in the slot.
+    mcp_oauth = {'fellow|abc': {'accessToken': 'fellow-at', 'refreshToken': 'fellow-rt'}}
+    machine['keychain'][cc_use.DEFAULT_SERVICE] = json.dumps({**json.loads(HOME_SECRET), 'mcpOAuth': mcp_oauth})
+
+    # Act
+    cc_use.load('work')
+
+    # Assert: the stashed login has no second copy of the sign-in.
+    assert machine['keychain'][cc_use.HOME_STASH_SERVICE] == HOME_SECRET
+
+
+def test__load__a_profiles_own_mcp_sign_ins_survive_a_round_trip(machine):
+    # Arrange: work signed in to its own MCP server in a `cc work` session; the slot has another.
+    slot_mcp = {'fellow|abc': {'accessToken': 'fellow-at'}}
+    work_mcp = {'atlassian|def': {'accessToken': 'atlassian-at'}}
+    work_with_mcp = json.dumps({**json.loads(WORK_SECRET), 'mcpOAuth': work_mcp})
+    machine['keychain'][cc_use.DEFAULT_SERVICE] = json.dumps({**json.loads(HOME_SECRET), 'mcpOAuth': slot_mcp})
+    machine['keychain'][cc_use._owner_service('work')] = work_with_mcp
+    before = dict(machine['keychain'])
+
+    # Act
+    cc_use.load('work')
+    cc_use.load(None)
+
+    # Assert: every item is as it was, with nothing set aside left over.
+    assert machine['keychain'] == before
+
+
+def test__load__failed_swap_leaves_a_profiles_mcp_sign_ins_where_they_were(machine, monkeypatch):
+    # Arrange: work has its own sign-in, and writing ~/.claude.json fails mid-swap.
+    work_with_mcp = json.dumps({**json.loads(WORK_SECRET), 'mcpOAuth': {'atlassian|def': {'accessToken': 'a'}}})
+    machine['keychain'][cc_use._owner_service('work')] = work_with_mcp
+    before = dict(machine['keychain'])
+    real_write_json = cc_use._write_json
+
+    def write_json(path, data):
+        if path == machine['global_config']:
+            raise OSError(28, 'No space left on device')
+        real_write_json(path, data)
+
+    monkeypatch.setattr(cc_use, '_write_json', write_json)
+
+    # Act
+    with pytest.raises(OSError, match='No space left'):
+        cc_use.load('work')
+
+    # Assert: apart from the stash (a failed swap from the user's own login keeps it), nothing changed.
+    after = {k: v for k, v in machine['keychain'].items() if k != cc_use.HOME_STASH_SERVICE}
+    assert after == before
+
+
 def test__load__names_the_fix_for_a_profile_that_never_logged_in(machine):
     # Arrange
     (machine['profiles'] / 'fresh').mkdir()

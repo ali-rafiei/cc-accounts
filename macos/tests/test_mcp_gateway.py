@@ -10,9 +10,20 @@ import mcp_gateway
 
 
 class _Upstream(http.server.BaseHTTPRequestHandler):
-    """Stands in for a hosted MCP server: records each request, answers with a session id."""
+    """Stands in for a hosted MCP server: records each request, answers with a session id.
+    A GET opens a server-sent event stream whose second event waits for `release`."""
 
     seen: list[dict] = []
+    release = threading.Event()
+
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/event-stream')
+        self.end_headers()
+        self.wfile.write(b'data: one\n\n')
+        self.wfile.flush()
+        _Upstream.release.wait(timeout=10)
+        self.wfile.write(b'data: two\n\n')
 
     def do_POST(self):
         body = self.rfile.read(int(self.headers['Content-Length']))
@@ -41,6 +52,7 @@ def _serve(handler):
 def gateway(monkeypatch):
     """The gateway with one route, 'tracker', to a local upstream, and a fake Keychain."""
     _Upstream.seen = []
+    _Upstream.release = threading.Event()
     keychain = {'tracker': 'secret-token'}
 
     def keychain_token(name):
@@ -56,16 +68,16 @@ def gateway(monkeypatch):
             yield {'port': port, 'keychain': keychain}
 
 
-def _post(port, path, body=b'{"method": "initialize"}'):
+def _post(port, path, body=b'{"method": "initialize"}', headers=None):
     conn = http.client.HTTPConnection('127.0.0.1', port, timeout=10)
-    conn.request('POST', path, body=body, headers={'Content-Type': 'application/json'})
+    conn.request('POST', path, body=body, headers={'Content-Type': 'application/json', **(headers or {})})
     resp = conn.getresponse()
     return resp.status, dict(resp.getheaders()), resp.read()
 
 
 def test__gateway__forwards_to_the_upstream_with_the_keychain_token(gateway):
-    # Act
-    status, headers, body = _post(gateway['port'], '/tracker')
+    # Act: a token the client sends itself is replaced, not forwarded.
+    status, headers, body = _post(gateway['port'], '/tracker', headers={'Authorization': 'Bearer client-token'})
 
     # Assert
     assert (status, body, headers['Mcp-Session-Id']) == (200, b'{"result": "ok"}', 'session-1')
@@ -105,3 +117,32 @@ def test__gateway__unreachable_upstream_is_502(gateway, monkeypatch):
     # Assert
     assert status == 502
     assert b'tracker' in body
+
+
+@pytest.mark.parametrize(
+    'headers',
+    [{'Host': 'evil.example:8765'}, {'Origin': 'http://evil.example'}],
+    ids=['rebound-host', 'browser-origin'],
+)
+def test__gateway__refuses_browser_requests_and_never_uses_the_token(gateway, headers):
+    # Act: what a web page that rebinds its DNS name to 127.0.0.1 would send.
+    status, _, _ = _post(gateway['port'], '/tracker', headers=headers)
+
+    # Assert
+    assert status == 403
+    assert _Upstream.seen == []
+
+
+def test__gateway__streams_each_event_as_the_upstream_sends_it(gateway):
+    # Arrange
+    conn = http.client.HTTPConnection('127.0.0.1', gateway['port'], timeout=3)
+    conn.request('GET', '/tracker', headers={'Accept': 'text/event-stream'})
+    resp = conn.getresponse()
+
+    # Act: the first event must arrive while the upstream still holds back the second.
+    first = resp.fp.readline() + resp.fp.readline()
+    _Upstream.release.set()
+    rest = resp.read()
+
+    # Assert
+    assert (resp.status, first, rest) == (200, b'data: one\n\n', b'data: two\n\n')

@@ -112,7 +112,9 @@ your MCP servers to every account instead:
   token), run it through the local gateway, `mcp_gateway.py`. It listens on
   `127.0.0.1:8765/<name>`, adds your token from the Keychain (item `claude-mcp-<name>`), and
   forwards to the server. The token stays on your Mac, never in a claude.ai account, so it
-  stays yours even on an account other people also use.
+  stays yours even on an account other people also use. It answers only local MCP clients:
+  a request naming another host, or carrying a browser's `Origin` header, gets a 403, so a
+  web page that rebinds its DNS name to `127.0.0.1` can't use your tokens.
 
 The gateway ships with routes for Linear and GitHub (`UPSTREAMS` in `mcp_gateway.py`):
 
@@ -151,7 +153,9 @@ expires, which is about 30 seconds. In VS Code, reopening the Claude tab switche
 Your own login waits in a separate Keychain item until `cc-use default` puts it back and
 deletes that spare copy. MCP server sign-ins (`mcpOAuth`, which Claude Code stores in the
 same item) stay in the default slot: the incoming account gets the slot's sign-ins, so you
-sign in to each server once, not once per account.
+sign in to each server once, not once per account. Only one copy of each sign-in exists, as
+with logins: a profile's own sign-ins, from its `cc <profile>` sessions, wait in a separate
+Keychain item while it is loaded and go back to the profile when it leaves the slot.
 
 Only one live copy of a login exists at a time. Claude Code refreshes tokens as it goes,
 and a refresh can leave an older copy dead, so `cc-use` moves a login around instead of

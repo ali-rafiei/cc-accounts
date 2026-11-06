@@ -35,6 +35,12 @@ def keychain_token(name: str) -> str:
 
 class Gateway(BaseHTTPRequestHandler):
     def _forward(self) -> None:
+        # A web page can reach 127.0.0.1 by rebinding its own DNS name to it. Its requests carry
+        # that name as Host, and an Origin, which Claude Code's client never sends.
+        port = self.server.server_address[1]
+        if self.headers.get('Host') not in (f'127.0.0.1:{port}', f'localhost:{port}') or 'Origin' in self.headers:
+            self.send_error(403, 'only local MCP clients may use this gateway')
+            return
         name = self.path.strip('/').split('?')[0]
         if name not in UPSTREAMS:
             self.send_error(404, f'unknown MCP server: {name}')
