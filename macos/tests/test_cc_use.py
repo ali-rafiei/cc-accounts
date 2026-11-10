@@ -5,6 +5,7 @@ import io
 import json
 import os
 import signal
+import subprocess
 import threading
 import time
 import unicodedata
@@ -160,6 +161,86 @@ def test__load__switching_between_profiles_leaves_the_stashed_login_alone(machin
     assert cc_use.loaded_profile() == 'other'
 
 
+def test__load__keeps_mcp_server_sign_ins_in_the_default_slot(machine):
+    # Arrange: the user signed in to an MCP server (Claude Code stores it in the slot's item).
+    mcp_oauth = {'fellow|abc': {'accessToken': 'fellow-at'}}
+    machine['keychain'][cc_use.DEFAULT_SERVICE] = json.dumps({**json.loads(HOME_SECRET), 'mcpOAuth': mcp_oauth})
+
+    # Act
+    cc_use.load('work')
+
+    # Assert: the work login is in the slot, and the MCP sign-in stayed with it.
+    slot = json.loads(machine['keychain'][cc_use.DEFAULT_SERVICE])
+    assert slot == {**json.loads(WORK_SECRET), 'mcpOAuth': mcp_oauth}
+
+
+def test__load__default_brings_back_mcp_sign_ins_made_while_a_profile_was_loaded(machine):
+    # Arrange: work is loaded, then the user signs in to an MCP server.
+    cc_use.load('work')
+    mcp_oauth = {'fellow|abc': {'accessToken': 'fellow-at'}}
+    machine['keychain'][cc_use.DEFAULT_SERVICE] = json.dumps({**json.loads(WORK_SECRET), 'mcpOAuth': mcp_oauth})
+
+    # Act
+    cc_use.load(None)
+
+    # Assert
+    slot = json.loads(machine['keychain'][cc_use.DEFAULT_SERVICE])
+    assert slot == {**json.loads(HOME_SECRET), 'mcpOAuth': mcp_oauth}
+    assert cc_use.loaded_profile() is None
+
+
+def test__load__outgoing_login_leaves_the_slots_mcp_sign_ins_behind(machine):
+    # Arrange: one live copy of each MCP refresh token, in the slot.
+    mcp_oauth = {'fellow|abc': {'accessToken': 'fellow-at', 'refreshToken': 'fellow-rt'}}
+    machine['keychain'][cc_use.DEFAULT_SERVICE] = json.dumps({**json.loads(HOME_SECRET), 'mcpOAuth': mcp_oauth})
+
+    # Act
+    cc_use.load('work')
+
+    # Assert: the stashed login has no second copy of the sign-in.
+    assert machine['keychain'][cc_use.HOME_STASH_SERVICE] == HOME_SECRET
+
+
+def test__load__a_profiles_own_mcp_sign_ins_survive_a_round_trip(machine):
+    # Arrange: work signed in to its own MCP server in a `cc work` session; the slot has another.
+    slot_mcp = {'fellow|abc': {'accessToken': 'fellow-at'}}
+    work_mcp = {'atlassian|def': {'accessToken': 'atlassian-at'}}
+    work_with_mcp = json.dumps({**json.loads(WORK_SECRET), 'mcpOAuth': work_mcp})
+    machine['keychain'][cc_use.DEFAULT_SERVICE] = json.dumps({**json.loads(HOME_SECRET), 'mcpOAuth': slot_mcp})
+    machine['keychain'][cc_use._owner_service('work')] = work_with_mcp
+    before = dict(machine['keychain'])
+
+    # Act
+    cc_use.load('work')
+    cc_use.load(None)
+
+    # Assert: every item is as it was, with nothing set aside left over.
+    assert machine['keychain'] == before
+
+
+def test__load__failed_swap_leaves_a_profiles_mcp_sign_ins_where_they_were(machine, monkeypatch):
+    # Arrange: work has its own sign-in, and writing ~/.claude.json fails mid-swap.
+    work_with_mcp = json.dumps({**json.loads(WORK_SECRET), 'mcpOAuth': {'atlassian|def': {'accessToken': 'a'}}})
+    machine['keychain'][cc_use._owner_service('work')] = work_with_mcp
+    before = dict(machine['keychain'])
+    real_write_json = cc_use._write_json
+
+    def write_json(path, data):
+        if path == machine['global_config']:
+            raise OSError(28, 'No space left on device')
+        real_write_json(path, data)
+
+    monkeypatch.setattr(cc_use, '_write_json', write_json)
+
+    # Act
+    with pytest.raises(OSError, match='No space left'):
+        cc_use.load('work')
+
+    # Assert: apart from the stash (a failed swap from the user's own login keeps it), nothing changed.
+    after = {k: v for k, v in machine['keychain'].items() if k != cc_use.HOME_STASH_SERVICE}
+    assert after == before
+
+
 def test__load__names_the_fix_for_a_profile_that_never_logged_in(machine):
     # Arrange
     (machine['profiles'] / 'fresh').mkdir()
@@ -216,18 +297,65 @@ def test__load__refuses_a_profile_with_a_running_session(machine):
     assert machine['keychain'][cc_use.DEFAULT_SERVICE] == HOME_SECRET
 
 
-def test__load__refuses_a_login_too_large_to_write_through_stdin_and_changes_nothing(machine):
-    # Arrange: a login past `security -i`'s line limit, as many MCP sign-ins beside it would make.
+def test__load__moves_a_login_past_the_stdin_limit(machine):
+    # Arrange: a login past `security -i`'s line limit, as many MCP sign-ins beside it make.
     large = json.dumps({'claudeAiOauth': {'accessToken': 'work-at', 'refreshToken': 'work-rt'}, 'pad': 'x' * 4096})
     machine['keychain'][cc_use._owner_service('work')] = large
-    before = dict(machine['keychain'])
+
+    # Act
+    cc_use.load('work')
+
+    # Assert
+    assert machine['keychain'][cc_use.DEFAULT_SERVICE] == large
+    assert cc_use.loaded_profile() == 'work'
+
+
+def _record_security(monkeypatch):
+    calls = []
+
+    def security(args, stdin=None):
+        calls.append({'args': args, 'stdin': stdin})
+        return subprocess.CompletedProcess(args, 0, '', '')
+
+    monkeypatch.setattr(cc_use, '_security', security)
+    monkeypatch.setattr(cc_use, '_keychain_account', lambda: 'me')
+    return calls
+
+
+def test__keychain_set__writes_a_login_within_the_limit_through_stdin(monkeypatch):
+    # Arrange
+    calls = _record_security(monkeypatch)
+
+    # Act
+    cc_use._keychain_set('svc', 'small')
+
+    # Assert: the secret goes through stdin, never the argument list.
+    assert calls == [{'args': ['-i'], 'stdin': f'add-generic-password -U -a "me" -s "svc" -X {b"small".hex()}\n'}]
+
+
+def test__keychain_set__writes_a_login_past_the_limit_through_argv_like_claude_code(monkeypatch):
+    # Arrange
+    calls = _record_security(monkeypatch)
+    secret = 'x' * cc_use.SECURITY_STDIN_LINE_LIMIT
+
+    # Act
+    cc_use._keychain_set('svc', secret)
+
+    # Assert
+    hex_secret = secret.encode().hex()
+    assert calls == [{'args': ['add-generic-password', '-U', '-a', 'me', '-s', 'svc', '-X', hex_secret], 'stdin': None}]
+
+
+def test__keychain_set__failed_write_names_the_item(monkeypatch):
+    # Arrange
+    monkeypatch.setattr(cc_use, '_keychain_account', lambda: 'me')
+    monkeypatch.setattr(
+        cc_use, '_security', lambda args, stdin=None: subprocess.CompletedProcess(args, 45, '', 'denied')
+    )
 
     # Act / Assert
-    with pytest.raises(cc_use.SwapError, match='too large'):
-        cc_use.load('work')
-    assert machine['keychain'] == before
-    assert cc_use.loaded_profile() is None
-    assert not cc_use.HOME_ACCOUNT_FILE.exists()
+    with pytest.raises(cc_use.SwapError, match="Keychain write of 'svc' failed \\(rc=45\\): denied"):
+        cc_use._keychain_set('svc', 'x' * cc_use.SECURITY_STDIN_LINE_LIMIT)
 
 
 def test__load__ignores_session_files_of_dead_processes(machine):
@@ -577,17 +705,6 @@ def test__security__reports_a_missing_binary_as_a_swap_error(tmp_path, monkeypat
     # Act / Assert
     with pytest.raises(cc_use.SwapError, match='no-such-security'):
         cc_use._security(['help'])
-
-
-def test__keychain_set__never_passes_a_large_secret_as_an_argument(monkeypatch):
-    # Arrange: arguments are readable by every local user through ps.
-    calls = []
-    monkeypatch.setattr(cc_use, '_security', lambda args, stdin=None: calls.append(args))
-
-    # Act / Assert
-    with pytest.raises(cc_use.SwapError, match='too large'):
-        cc_use._keychain_set(cc_use.DEFAULT_SERVICE, 'x' * 4096)
-    assert calls == []
 
 
 def test__status__treats_a_null_oauth_account_as_no_account(machine):

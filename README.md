@@ -5,6 +5,9 @@ command shows usage across all of them, Claude can hand a task to another accoun
 can switch which account VS Code and plain `claude`
 in a terminal run as, without reloading anything.
 
+On macOS, your MCP servers follow you too: register a server once and every account has it,
+with sign-ins kept on your machine rather than in any one claude.ai account.
+
 Written for people who have more than one Claude subscription or seat (personal and work,
 or several team seats) and want to use whichever one has room left this week.
 

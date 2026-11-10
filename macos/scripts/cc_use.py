@@ -154,14 +154,13 @@ def load(target: str | None) -> str:
                 f'{target} is not logged in (cc-login {target})' if target else 'no stashed login to restore'
             )
         incoming_account = _profile_account(target) if target else _read_json(HOME_ACCOUNT_FILE)
-        # Every write the swap or its rollback could make, checked before the first one happens.
-        for service, secret in (
-            (_owner_service(owner), current),
-            (DEFAULT_SERVICE, incoming),
-            (_owner_service(target), incoming),
-            (DEFAULT_SERVICE, current),
-        ):
-            _keychain_set_command(service, secret)
+        # MCP sign-ins (mcpOAuth) stay in the slot, so one live copy of each exists. A profile's own,
+        # from its `cc <profile>` sessions, wait in a side item while it is loaded.
+        current_login, slot_mcp = _split_mcp_oauth(current)
+        incoming_login, incoming_mcp = _split_mcp_oauth(incoming)
+        slot_incoming = _with_mcp_oauth(incoming_login, slot_mcp)
+        owner_parked = _keychain_get(_mcp_park_service(owner)) if owner is not None else None
+        outgoing = _with_mcp_oauth(current_login, json.loads(owner_parked) if owner_parked else None)
         config = _read_json(GLOBAL_CONFIG)
         # The record goes first: uninstall runs `forget` only when it exists, so no stash may outlive it.
         if owner is None:
@@ -171,34 +170,45 @@ def load(target: str | None) -> str:
             _write_json(HOME_ACCOUNT_FILE, home_account)
         # From here on the slot, ~/.claude.json and .loaded must change together; a
         # half-done swap would make _verify_owner refuse every later run.
-        moved = config_written = False
+        moved = parked = config_written = False
         try:
-            _keychain_set(_owner_service(owner), current)
-            _keychain_set(DEFAULT_SERVICE, incoming)
+            _keychain_set(_owner_service(owner), outgoing)
+            _keychain_set(DEFAULT_SERVICE, slot_incoming)
+            if target is not None and incoming_mcp:
+                parked = True
+                _keychain_set(_mcp_park_service(target), json.dumps(incoming_mcp))
             # Moved, not copied: a session run on the profile's own copy would strand the slot's.
             if target is not None:
                 moved = True
                 _keychain_delete(_owner_service(target))
             _write_json(GLOBAL_CONFIG, {**config, 'oauthAccount': incoming_account})
             config_written = True
-            _write_loaded(target, incoming)
+            _write_loaded(target, slot_incoming)
         except BaseException:
             # Until the profile's item is back, the slot may hold its login's only copy.
             if not moved or _undo(_keychain_set, _owner_service(target), incoming):
                 if _undo(_keychain_set, DEFAULT_SERVICE, current) and owner is not None:
                     _undo(_keychain_delete, _owner_service(owner))
+                if parked:
+                    _undo(_keychain_delete, _mcp_park_service(target))
             if config_written:
                 _undo(_write_json, GLOBAL_CONFIG, config)
                 _undo(_write_loaded, owner, current)
             raise
-        # Your login is back in the slot, so the stash is a stale copy from here on.
         note = ''
+        # The owner's own sign-ins are back in its item, so the side copy is stale from here on.
+        if owner_parked is not None:
+            try:
+                _keychain_delete(_mcp_park_service(owner))
+            except SwapError as exc:
+                note = f" A stale copy of {owner}'s MCP sign-ins was not deleted ({exc})."
+        # Your login is back in the slot, so the stash is a stale copy from here on.
         if target is None:
             try:
                 _keychain_delete(HOME_STASH_SERVICE)
                 HOME_ACCOUNT_FILE.unlink(missing_ok=True)
             except (SwapError, OSError) as exc:
-                note = f' The stale stash was not deleted ({exc}); `cc-use forget` deletes it.'
+                note += f' The stale stash was not deleted ({exc}); `cc-use forget` deletes it.'
 
     return (
         f'default slot: {_label(owner)} -> {_label(target)} '
@@ -438,6 +448,22 @@ def _write_loaded(profile: str | None, credentials: str) -> None:
     LOADED_FILE.write_text(profile + '\n')
 
 
+def _split_mcp_oauth(credentials: str) -> tuple[str, dict | None]:
+    """A Keychain login without its MCP server sign-ins (mcpOAuth), and those sign-ins (None if it has none)."""
+    data = json.loads(credentials)
+    mcp_oauth = data.pop('mcpOAuth', None)
+    return (json.dumps(data), mcp_oauth) if mcp_oauth else (credentials, None)
+
+
+def _with_mcp_oauth(login: str, mcp_oauth: dict | None) -> str:
+    return json.dumps({**json.loads(login), 'mcpOAuth': mcp_oauth}) if mcp_oauth else login
+
+
+def _mcp_park_service(profile: str) -> str:
+    """Where a loaded profile's own MCP sign-ins wait, so the slot keeps only its own."""
+    return f'{_owner_service(profile)}-cc-use-mcp'
+
+
 def _fingerprint(credentials: str) -> str | None:
     token = _oauth(credentials).get('refreshToken')
     return hashlib.sha256(token.encode()).hexdigest() if isinstance(token, str) and token else None
@@ -496,21 +522,17 @@ def _keychain_get(service: str) -> str | None:
 
 
 def _keychain_set(service: str, secret: str) -> None:
-    done = _security(['-i'], stdin=_keychain_set_command(service, secret))
+    """Write secret through `security -i`'s stdin, so it stays out of the process list. A login past
+    the stdin line limit (many MCP sign-ins) goes as an argument instead, as Claude Code itself writes
+    the same item past that limit."""
+    account, hex_secret = _keychain_account(), secret.encode().hex()
+    command = f'add-generic-password -U -a "{account}" -s "{service}" -X {hex_secret}\n'
+    if len(command.encode()) <= SECURITY_STDIN_LINE_LIMIT:
+        done = _security(['-i'], stdin=command)
+    else:
+        done = _security(['add-generic-password', '-U', '-a', account, '-s', service, '-X', hex_secret])
     if done.returncode != 0:
         raise SwapError(f'Keychain write of {service!r} failed (rc={done.returncode}): {done.stderr.strip()}')
-
-
-def _keychain_set_command(service: str, secret: str) -> str:
-    """The `security -i` line that writes secret. Past the line limit there is no safe way to write it:
-    as an argument, the token would be readable by every local user through ps."""
-    command = f'add-generic-password -U -a "{_keychain_account()}" -s "{service}" -X {secret.encode().hex()}\n'
-    if len(command.encode()) > SECURITY_STDIN_LINE_LIMIT:
-        raise SwapError(
-            f'the login for {service!r} is too large ({len(secret.encode())} bytes) to write through '
-            "`security`'s stdin, and as an argument its token would be visible to other processes"
-        )
-    return command
 
 
 def _keychain_delete(service: str) -> None:

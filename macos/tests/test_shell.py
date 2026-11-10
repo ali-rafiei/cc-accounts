@@ -112,6 +112,38 @@ def test__cc__shares_skills_plugins_and_plugin_settings(home):
     assert settings == {'theme': 'light', 'enabledPlugins': {'tool@market': True}}
 
 
+def test__cc__shares_user_mcp_servers_and_keeps_the_profiles_own_config(home):
+    # Arrange
+    servers = {'linear': {'type': 'http', 'url': 'http://127.0.0.1:8765/linear'}}
+    (home / '.claude.json').write_text(json.dumps({'mcpServers': servers, 'numStartups': 7}))
+    profile = home / '.claude-profiles' / 'work'
+    profile.mkdir()
+    (profile / '.claude.json').write_text(json.dumps({'oauthAccount': {'emailAddress': 'work@example.com'}}))
+
+    # Act
+    _zsh('cc work', home)
+
+    # Assert: only mcpServers is copied; the profile keeps its own account.
+    config = json.loads((profile / '.claude.json').read_text())
+    assert config == {'oauthAccount': {'emailAddress': 'work@example.com'}, 'mcpServers': servers}
+
+
+def test__cc__unreadable_claude_json_still_shares_plugin_settings_and_starts(home):
+    # Arrange
+    profile = home / '.claude-profiles' / 'work'
+    profile.mkdir()
+    (home / '.claude.json').write_text('{"mcpServers": {},}')
+
+    # Act
+    out = _zsh('cc work', home)
+
+    # Assert
+    assert 'Traceback' not in out
+    assert '.claude.json' in out
+    assert json.loads((profile / 'settings.json').read_text()) == {'enabledPlugins': {'tool@market': True}}
+    assert f'CONFIG={profile} ARGS=' in out.splitlines()
+
+
 @pytest.mark.parametrize('content', ['{"enabledPlugins": {},}', '[]'], ids=['trailing-comma', 'list'])
 def test__cc__names_an_unreadable_settings_file_instead_of_a_traceback(home, content):
     # Arrange

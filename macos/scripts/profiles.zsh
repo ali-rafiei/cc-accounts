@@ -170,6 +170,8 @@ _cc_usage_probe() {
 # Link your skills and plugins into a profile. A real directory already there is left alone.
 # Which plugins are on lives in settings.json, not the plugins dir, so those two keys are
 # mirrored from ~/.claude/settings.json into the profile's own settings on every launch.
+# User-scope MCP servers (mcpServers in ~/.claude.json) are mirrored the same way, so every
+# account gets the servers registered once with `claude mcp add --scope user`.
 _cc_share() {
   emulate -L zsh
   local item
@@ -179,21 +181,26 @@ _cc_share() {
   python3 - "$1" <<'EOF'
 import json, sys
 from pathlib import Path
-KEYS = ('enabledPlugins', 'extraKnownMarketplaces')
+SHARED = (  # (file under ~, file in the profile, keys copied)
+    ('.claude/settings.json', 'settings.json', ('enabledPlugins', 'extraKnownMarketplaces')),
+    ('.claude.json', '.claude.json', ('mcpServers',)),
+)
 def read(path):
     data = json.loads(path.read_text()) if path.exists() else {}
     if not isinstance(data, dict):
         raise ValueError('not a JSON object')
     return data
-source_path = Path.home() / '.claude' / 'settings.json'
-target_path = Path(sys.argv[1]) / 'settings.json'
-try:
-    source, target = read(source_path), read(target_path)
-except (OSError, ValueError) as exc:
-    # Launch anyway: the profile keeps the plugin settings it had.
-    sys.exit(f'cc: plugin settings not shared, could not read a settings.json ({exc}): {source_path}, {target_path}')
-merged = {**target, **{k: source[k] for k in KEYS if k in source}}
-if merged != target:
-    target_path.write_text(json.dumps(merged, indent=2) + '\n')
+for source_name, target_name, keys in SHARED:
+    source_path = Path.home() / source_name
+    target_path = Path(sys.argv[1]) / target_name
+    try:
+        source, target = read(source_path), read(target_path)
+    except (OSError, ValueError) as exc:
+        # Launch anyway: the profile keeps the values it had.
+        print(f'cc: {", ".join(keys)} not shared, could not read ({exc}): {source_path}, {target_path}', file=sys.stderr)
+        continue
+    merged = {**target, **{k: source[k] for k in keys if k in source}}
+    if merged != target:
+        target_path.write_text(json.dumps(merged, indent=2) + '\n')
 EOF
 }

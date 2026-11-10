@@ -61,7 +61,7 @@ cd cc-accounts/macos
 ./install.sh
 ```
 
-`install.sh` copies four files into `~/.claude-profiles` (or `$CLAUDE_PROFILES`) and adds
+`install.sh` copies six files into `~/.claude-profiles` (or `$CLAUDE_PROFILES`) and adds
 one `source` line to `~/.zshrc` (or `$ZDOTDIR/.zshrc`) unless one is already there. It backs
 up any file it would overwrite. Run it again after a `git pull` to update.
 
@@ -99,6 +99,37 @@ cc-use work          # VS Code and plain `claude` now run as work (macOS)
 cc-use default       # and back
 ```
 
+## Share MCP servers across accounts
+
+claude.ai connectors (Linear, Slack, Gmail and so on) belong to one claude.ai account, and
+their sign-ins can't be copied out, so another account doesn't get them. Two things carry
+your MCP servers to every account instead:
+
+- **Register once.** Add a server at user scope on your default login
+  (`claude mcp add --scope user ...`). Each `cc <profile>` launch copies that list into the
+  profile, and VS Code and plain `claude` read it whichever account `cc-use` has loaded.
+- **Sign in once.** For a hosted server that takes a token (an API key or personal access
+  token), run it through the local gateway, `mcp_gateway.py`. It listens on
+  `127.0.0.1:8765/<name>`, adds your token from the Keychain (item `claude-mcp-<name>`), and
+  forwards to the server. The token stays on your Mac, never in a claude.ai account, so it
+  stays yours even on an account other people also use. It answers only local MCP clients:
+  a request naming another host, or carrying a browser's `Origin` header, gets a 403, so a
+  web page that rebinds its DNS name to `127.0.0.1` can't use your tokens.
+
+The gateway ships with routes for Linear and GitHub (`UPSTREAMS` in `mcp_gateway.py`):
+
+```sh
+~/.claude-profiles/mcp_gateway_setup.sh linear github   # start it at login, ask for each token
+claude mcp add --scope user --transport http linear http://127.0.0.1:8765/linear
+claude mcp add --scope user --transport http github http://127.0.0.1:8765/github
+```
+
+The setup script installs a launchd agent that starts the gateway at login, then asks for
+each token in a hidden-input dialog. A server that signs in with OAuth through Claude Code
+itself (`/mcp`) needs no gateway: register it the same way and sign in once on your default
+login; `cc-use` keeps that sign-in when it switches accounts. A `cc <profile>` session keeps
+its own sign-ins, so sign in once per profile there.
+
 ## How it works
 
 **Profiles.** A profile is a directory under `~/.claude-profiles/`, which `cc` passes to
@@ -109,8 +140,10 @@ transcripts. Your default login stays where Claude Code keeps it (the Keychain a
 **Shared skills and plugins.** Each time `cc` starts a profile, it links `~/.claude/skills`
 and `~/.claude/plugins` into it. It also copies `enabledPlugins` and
 `extraKnownMarketplaces` from your `~/.claude/settings.json`, because Claude Code records
-whether a plugin is on in each account's settings, not in the plugins folder. Install a
-skill or plugin once and every profile has it. A profile's other settings stay its own.
+whether a plugin is on in each account's settings, not in the plugins folder. It copies
+`mcpServers` from `~/.claude.json` the same way, so user-scope MCP servers reach every
+profile. Install a skill, plugin or MCP server once and every profile has it. A profile's
+other settings stay its own.
 
 **Swapping the default account (`cc-use`).** VS Code and plain `claude` use the default login:
 the `Claude Code-credentials` item in the macOS Keychain, plus the account details in
@@ -118,7 +151,11 @@ the `Claude Code-credentials` item in the macOS Keychain, plus the account detai
 start on it straight away, and running ones pick it up once Claude Code's Keychain cache
 expires, which is about 30 seconds. In VS Code, reopening the Claude tab switches at once.
 Your own login waits in a separate Keychain item until `cc-use default` puts it back and
-deletes that spare copy.
+deletes that spare copy. MCP server sign-ins (`mcpOAuth`, which Claude Code stores in the
+same item) stay in the default slot: the incoming account gets the slot's sign-ins, so you
+sign in to each server once, not once per account. Only one copy of each sign-in exists, as
+with logins: a profile's own sign-ins, from its `cc <profile>` sessions, wait in a separate
+Keychain item while it is loaded and go back to the profile when it leaves the slot.
 
 Only one live copy of a login exists at a time. Claude Code refreshes tokens as it goes,
 and a refresh can leave an older copy dead, so `cc-use` moves a login around instead of
@@ -152,11 +189,11 @@ profile's own copy. A few checks guard the swap:
   `command cc` when you want the compiler by hand.
 - `cc-use` switches every session on the default login at once: all VS Code tabs and every
   plain `claude` in a terminal. Sessions started with `cc <profile>` are unaffected.
-- `cc-use` refuses to move a login larger than about 2 KB (each MCP server you sign into
-  adds to it). `security` can only take one that size as a command-line argument, where
-  every local user can read it, so the swap stops before changing anything. If the default
-  login grows past it while a profile is loaded (MCP sign-ins in VS Code, say), sign out of
-  those servers in `/mcp` before `cc-use default`.
+- `cc-use` writes a login through `security`'s stdin, which keeps the token out of the
+  process list. Past about 2 KB (each MCP server you sign in to adds roughly 400 bytes),
+  `security` can't read it from stdin, so `cc-use` passes it as a command-line argument,
+  where other local processes can briefly see it. Claude Code does the same when it writes
+  that item, so `cc-use` exposes nothing Claude Code doesn't already.
 - While a profile is loaded, signing the default login in or out anywhere else (`/login` or
   `/logout` in VS Code, plain `claude auth login`) replaces that profile's only login. Run
   `cc-use default` first.
@@ -181,7 +218,7 @@ cc-use default            # if a profile is loaded; uninstall refuses otherwise
 ./install.sh --uninstall  # from the clone's macos folder
 ```
 
-That removes the scripts, the `~/.zshrc` line (backing up `~/.zshrc` first) and any skill
+That removes the scripts, the MCP gateway's launchd agent, the `~/.zshrc` line (backing up `~/.zshrc` first) and any skill
 links from `--skills`. If `cc-use` still holds a copy of your login (normally it doesn't,
 since `cc-use default` deletes it), uninstall deletes it once it can confirm your own login is
 back in the default slot. If another account is in the slot, uninstall stops before removing
