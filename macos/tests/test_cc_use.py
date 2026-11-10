@@ -71,6 +71,30 @@ def test__owner_service__default_login_goes_to_the_stash(machine):
     assert cc_use._owner_service(None) == cc_use.HOME_STASH_SERVICE
 
 
+def test__stored_oauth__reads_the_login_claude_code_keeps_for_a_config_dir(machine):
+    # Act
+    oauth = cc_use.stored_oauth(machine['profiles'] / 'work')
+
+    # Assert
+    assert oauth == {'accessToken': 'work-at', 'refreshToken': 'work-rt'}
+
+
+def test__stored_oauth__reads_the_default_slot_for_no_config_dir(machine):
+    # Act
+    oauth = cc_use.stored_oauth(None)
+
+    # Assert
+    assert oauth == {'accessToken': 'home-at', 'refreshToken': 'home-rt'}
+
+
+def test__stored_oauth__is_empty_for_a_config_dir_never_logged_in(machine):
+    # Act
+    oauth = cc_use.stored_oauth(machine['profiles'] / 'new')
+
+    # Assert
+    assert oauth == {}
+
+
 @pytest.mark.parametrize('name', ['bin', 'default', '.hidden', '_scratch', 'missing', '', 'work/', 'work/.'])
 def test__load__rejects_names_that_are_not_profiles(machine, name):
     # Arrange

@@ -17,7 +17,7 @@ Shell commands (zsh):
 | `cc-add <profile>` | Create a profile and log it in |
 | `cc <profile> [args]` | Run Claude Code as that account (`cc default` runs your normal login) |
 | `cc-login <profile>` | Log a profile in again. The sign-in page opens in a private browser window on your own browser profile (Google Chrome, or the browser `CC_LOGIN_BROWSER` names), so your saved passwords fill but it can't pick up whichever account your browser is signed into. Private windows share one set of cookies, so it refuses while one is already open: close them first. Firefox gets a throwaway profile instead |
-| `ccusage-all` | One table of session and weekly usage for every account, soonest reset first |
+| `ccusage-all` | One table of session and weekly usage for every account, soonest reset first. Its last column names any login that has expired or expires within 3 days: a login lasts a few weeks, refreshing does not extend it, and once it lapses every run fails until `cc-login` |
 | `cc-use <profile>` | macOS: put that account's login in the default slot, so VS Code and plain `claude` run as it. `cc-use default` puts yours back |
 
 Skills, so you can ask Claude directly:

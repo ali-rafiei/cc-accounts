@@ -30,6 +30,12 @@ No column explanations, no summary of the numbers, no restating rows in prose.
 - **A row says `not logged in`**: one line, `` `cc-login <profile>` to re-auth ``. It
   opens a private browser window, and refuses while another is open, so the flow cannot reuse
   whichever account the browser, or an earlier login, is already signed into.
+- **A row has a `LOGIN EXPIRES` value**: that login stops working then (`expired ...`: it
+  already has), though Claude Code still reports it as logged in. One line,
+  `` `cc-login <profile>` to re-auth ``. For the `[default]` profile, `cc-use default` comes
+  first, since `cc-login` refuses a profile cc-use has loaded, and `cc-use <profile>` loads it
+  again after; for a row named `default`, it is `claude auth login`. `unknown` means the
+  Keychain could not be read: say that instead.
 - **The user asked which account to use**: name one account in one line. Pick the lowest
   `WEEK`, ignoring accounts whose reset is imminent, and check `OTHER LIMITS` too: a
   per-model cap at 100% makes that model unusable even when `WEEK` is low.

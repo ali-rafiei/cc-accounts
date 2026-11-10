@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import cc_use
 import usage_table
 
 LOGIN_OVERRIDES = ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN')
@@ -25,6 +26,8 @@ def isolate_machine(tmp_path_factory, monkeypatch):
     monkeypatch.setenv('HOME', str(machine))
     monkeypatch.setenv('USERPROFILE', str(machine))
     monkeypatch.setattr(usage_table, 'PROFILES_DIR', machine / '.claude-profiles')
+    # Nor the real Keychain.
+    monkeypatch.setattr(usage_table, 'stored_oauth', lambda config_dir: {})
 
 
 @pytest.fixture
@@ -312,6 +315,105 @@ def test__claude__probes_without_login_overrides_even_for_the_default_login(tmp_
 
     # Assert
     assert seen['login_env'] == []
+
+
+def test__probe__flags_a_login_that_expires_within_three_days(profiles, monkeypatch):
+    # Arrange
+    _frozen_now(monkeypatch, datetime(2026, 10, 11, 12, 0))
+    _stored_logins(monkeypatch, {profiles / 'work': datetime(2026, 10, 12, 22, 57)})
+    _fake_claude(monkeypatch, '{"loggedIn": true}')
+
+    # Act
+    row = usage_table._probe('work', profiles / 'work')
+
+    # Assert
+    assert row['login'] == 'Monday at 10:57pm'
+
+
+def test__probe__leaves_a_login_with_weeks_left_unflagged(profiles, monkeypatch):
+    # Arrange
+    _frozen_now(monkeypatch, datetime(2026, 10, 11, 12, 0))
+    _stored_logins(monkeypatch, {profiles / 'work': datetime(2026, 11, 8, 23, 9)})
+    _fake_claude(monkeypatch, '{"loggedIn": true}')
+
+    # Act
+    row = usage_table._probe('work', profiles / 'work')
+
+    # Assert
+    assert row['login'] == ''
+
+
+def test__probe__marks_a_login_that_has_expired(profiles, monkeypatch):
+    # Arrange: Claude Code still reports an expired login as logged in.
+    _frozen_now(monkeypatch, datetime(2026, 10, 11, 12, 0))
+    _stored_logins(monkeypatch, {profiles / 'work': datetime(2026, 10, 11, 4, 6)})
+    _fake_claude(monkeypatch, '{"loggedIn": true}')
+
+    # Act
+    row = usage_table._probe('work', profiles / 'work')
+
+    # Assert
+    assert row['login'] == 'expired Oct 11'
+
+
+def test__probe__reads_the_loaded_profiles_expiry_from_the_default_slot(profiles, monkeypatch):
+    # Arrange: cc-use moved work's login into the default slot, so its profile holds none.
+    _frozen_now(monkeypatch, datetime(2026, 10, 11, 12, 0))
+    _stored_logins(monkeypatch, {None: datetime(2026, 10, 11, 20, 0)})
+    _fake_claude(monkeypatch, '{"loggedIn": true}')
+
+    # Act
+    row = usage_table._probe('work', None)
+
+    # Assert
+    assert row['login'] == 'Sunday at 8pm'
+
+
+def test__probe__shows_an_unreadable_keychain_as_an_unknown_expiry(profiles, monkeypatch):
+    # Arrange
+    def locked(config_dir):
+        raise cc_use.SwapError('Keychain did not answer within 5.0s (locked?)')
+
+    monkeypatch.setattr(usage_table, 'stored_oauth', locked)
+    _fake_claude(monkeypatch, '{"loggedIn": true}')
+
+    # Act
+    row = usage_table._probe('work', profiles / 'work')
+
+    # Assert
+    assert row['login'] == 'unknown'
+
+
+def test__render__shows_when_a_login_expires_in_the_last_column(capsys):
+    # Arrange
+    row = {
+        'account': 'work@example.com',
+        'profile': 'work',
+        'session': 0,
+        'week': 5,
+        'other': '',
+        'resets': 'Friday at 7am',
+        'note': '',
+        'login': 'Monday at 10:57pm',
+    }
+
+    # Act
+    usage_table._render([row])
+
+    # Assert
+    header, _, line = capsys.readouterr().out.splitlines()
+    assert header.endswith('LOGIN EXPIRES')
+    assert line.endswith('Friday at 7am  Monday at 10:57pm')
+
+
+def _stored_logins(monkeypatch, expiries: dict) -> None:
+    """Fake Keychain logins by config dir (None: the default slot), each expiring at its datetime."""
+
+    def stored_oauth(config_dir):
+        expires_at = expiries.get(config_dir)
+        return {} if expires_at is None else {'refreshTokenExpiresAt': int(expires_at.timestamp() * 1000)}
+
+    monkeypatch.setattr(usage_table, 'stored_oauth', stored_oauth)
 
 
 def _install_probe_stub(tmp_path: Path, monkeypatch) -> None:
