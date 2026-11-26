@@ -126,9 +126,29 @@ claude mcp add --scope user --transport http github http://127.0.0.1:8765/github
 
 The setup script installs a launchd agent that starts the gateway at login, then asks for
 each token in a hidden-input dialog. A server that signs in with OAuth through Claude Code
-itself (`/mcp`) needs no gateway: register it the same way and sign in once on your default
-login; `cc-use` keeps that sign-in when it switches accounts. A `cc <profile>` session keeps
-its own sign-ins, so sign in once per profile there.
+itself (`/mcp`) needs no gateway on the default login: sign in once there, and `cc-use`
+keeps that sign-in when it switches accounts.
+
+### Which servers reach every account
+
+| Server | Default login (VS Code, plain `claude`) | Profiles (`cc <profile>`, `CLAUDE_CONFIG_DIR`) |
+|---|---|---|
+| Linear, GitHub | gateway, Keychain token | gateway, same token |
+| Alta (`forgefirst`), Fellow | its own `/mcp` sign-in | gateway, the default login's sign-in |
+| claude.ai connectors (Slack, Gmail, Meetings) | that claude.ai account's | that claude.ai account's |
+
+Alta and Fellow rotate their refresh token on every refresh, so a copied sign-in dies the
+first time another copy refreshes. The gateway's `forgefirst` and `fellow` routes therefore
+use the one sign-in in the default login (sign in there with `/mcp`): they add its access
+token, refresh it when it is due or the server answers 401, and write the result back,
+under the same lock directories Claude Code takes for an MCP refresh and a credentials
+write. The setup script registers both routes as user-scope servers in every profile, and
+`cc` keeps a profile's gateway servers when it copies the default login's list. Rerun the
+setup script after adding a profile. In a profile, Alta's tools are `mcp__forgefirst__*`;
+the `alta` plugin's own server there stays signed out.
+
+claude.ai connectors belong to the claude.ai account, so they stay per account: the gateway
+can't share them.
 
 ## How it works
 

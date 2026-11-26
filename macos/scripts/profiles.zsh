@@ -171,7 +171,9 @@ _cc_usage_probe() {
 # Which plugins are on lives in settings.json, not the plugins dir, so those two keys are
 # mirrored from ~/.claude/settings.json into the profile's own settings on every launch.
 # User-scope MCP servers (mcpServers in ~/.claude.json) are mirrored the same way, so every
-# account gets the servers registered once with `claude mcp add --scope user`.
+# account gets the servers registered once with `claude mcp add --scope user`. A profile's
+# own servers on the local MCP gateway (mcp_gateway_setup.sh adds them) are kept over the
+# default login's server of the same name.
 _cc_share() {
   emulate -L zsh
   local item
@@ -200,6 +202,13 @@ for source_name, target_name, keys in SHARED:
         print(f'cc: {", ".join(keys)} not shared, could not read ({exc}): {source_path}, {target_path}', file=sys.stderr)
         continue
     merged = {**target, **{k: source[k] for k in keys if k in source}}
+    if isinstance(merged.get('mcpServers'), dict) and isinstance(target.get('mcpServers'), dict):
+        on_gateway = {
+            name: server
+            for name, server in target['mcpServers'].items()
+            if isinstance(server, dict) and str(server.get('url', '')).startswith('http://127.0.0.1:8765/')
+        }
+        merged['mcpServers'] = {**merged['mcpServers'], **on_gateway}
     if merged != target:
         target_path.write_text(json.dumps(merged, indent=2) + '\n')
 EOF

@@ -128,6 +128,62 @@ def test__cc__shares_user_mcp_servers_and_keeps_the_profiles_own_config(home):
     assert config == {'oauthAccount': {'emailAddress': 'work@example.com'}, 'mcpServers': servers}
 
 
+def test__cc__keeps_the_profiles_own_gateway_servers_over_the_default_logins(home):
+    # Arrange: the default login reaches fellow directly; the profile reaches it through the gateway.
+    (home / '.claude.json').write_text(
+        json.dumps({'mcpServers': {'fellow': {'type': 'http', 'url': 'https://fellow.app/mcp'}, 'rea': {}}})
+    )
+    profile = home / '.claude-profiles' / 'work'
+    profile.mkdir()
+    gateway_servers = {
+        'fellow': {'type': 'http', 'url': 'http://127.0.0.1:8765/fellow'},
+        'forgefirst': {'type': 'http', 'url': 'http://127.0.0.1:8765/forgefirst'},
+    }
+    (profile / '.claude.json').write_text(json.dumps({'mcpServers': {**gateway_servers, 'old': {}}}))
+
+    # Act
+    _zsh('cc work', home)
+
+    # Assert
+    config = json.loads((profile / '.claude.json').read_text())
+    assert config['mcpServers'] == {'rea': {}, **gateway_servers}
+
+
+def test__mcp_gateway_setup__registers_the_oauth_routes_in_every_profile_only(home):
+    # Arrange: stubs record each claude call with the config dir it ran under.
+    (home / 'Library' / 'LaunchAgents').mkdir(parents=True)
+    for name in ('work', 'team-2', 'bin', '.hidden', '_scratch'):
+        (home / '.claude-profiles' / name).mkdir(exist_ok=True)
+    stubs = home / 'stubs'
+    stubs.mkdir()
+    log = home / 'claude.log'
+    (stubs / 'launchctl').write_text('#!/bin/sh\n')
+    (stubs / 'claude').write_text(f'#!/bin/sh\necho "${{CLAUDE_CONFIG_DIR:-none}} $*" >> {log}\n')
+    for stub in stubs.iterdir():
+        stub.chmod(0o755)
+
+    # Act
+    _run(
+        ['zsh', str(home / '.claude-profiles' / 'mcp_gateway_setup.sh')],
+        home,
+        extra_env={'PATH': f'{stubs}:{os.environ["PATH"]}'},
+    )
+
+    # Assert
+    calls = log.read_text().splitlines()
+    profiles = home / '.claude-profiles'
+    expected = [
+        line
+        for name in ('team-2', 'work')
+        for route in ('forgefirst', 'fellow')
+        for line in (
+            f'{profiles / name} mcp remove --scope user {route}',
+            f'{profiles / name} mcp add --scope user --transport http {route} http://127.0.0.1:8765/{route}',
+        )
+    ]
+    assert calls == expected
+
+
 def test__cc__unreadable_claude_json_still_shares_plugin_settings_and_starts(home):
     # Arrange
     profile = home / '.claude-profiles' / 'work'
