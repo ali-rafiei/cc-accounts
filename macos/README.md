@@ -116,7 +116,8 @@ your MCP servers to every account instead:
   a request naming another host, or carrying a browser's `Origin` header, gets a 403, so a
   web page that rebinds its DNS name to `127.0.0.1` can't use your tokens.
 
-The gateway ships with routes for Linear and GitHub (`UPSTREAMS` in `mcp_gateway.py`):
+The gateway ships with token routes for Linear and GitHub (`UPSTREAMS` in `mcp_gateway.py`;
+its OAuth routes for Alta and Fellow are covered below):
 
 ```sh
 ~/.claude-profiles/mcp_gateway_setup.sh linear github   # start it at login, ask for each token
@@ -126,9 +127,35 @@ claude mcp add --scope user --transport http github http://127.0.0.1:8765/github
 
 The setup script installs a launchd agent that starts the gateway at login, then asks for
 each token in a hidden-input dialog. A server that signs in with OAuth through Claude Code
-itself (`/mcp`) needs no gateway: register it the same way and sign in once on your default
-login; `cc-use` keeps that sign-in when it switches accounts. A `cc <profile>` session keeps
-its own sign-ins, so sign in once per profile there.
+itself (`/mcp`) needs no gateway on the default login: sign in once there, and `cc-use`
+keeps that sign-in when it switches accounts.
+
+### Which servers reach every account
+
+| Server | Default login (VS Code, plain `claude`) | Profiles (`cc <profile>`, `CLAUDE_CONFIG_DIR`) |
+|---|---|---|
+| Linear, GitHub | gateway, Keychain token | gateway, same token |
+| Alta (`forgefirst`), Fellow | its own `/mcp` sign-in | gateway, the default login's sign-in |
+| claude.ai connectors (Slack, Gmail, Meetings) | that claude.ai account's | that claude.ai account's |
+
+Alta and Fellow rotate their refresh token on every refresh, so a copied sign-in dies the
+first time another copy refreshes. The gateway's `forgefirst` and `fellow` routes therefore
+use the one sign-in in the default login (sign in there with `/mcp`): they add its access
+token, refresh it when it is due or the server answers 401, and write the result back,
+under the same lock directories Claude Code takes for an MCP refresh and a credentials
+write. The setup script registers both routes as user-scope servers in every profile, and
+`cc` keeps the profile's `forgefirst` and `fellow` gateway servers when it copies the
+default login's list; every other server follows the default login. Rerun the setup script
+after adding a profile.
+
+In a profile session the gateway exposes Alta as `mcp__forgefirst__*`; the `alta` plugin's
+own server there stays signed out. The `alta` and `alta-review` skills (alta plugin 2.0.0)
+only look for `mcp__plugin_alta_forgefirst__*`, so today a profile session gets Alta's
+review only when the request names the `forgefirst` Hub server. Making it automatic needs a
+change to the alta plugin in the altaml plugin repo.
+
+claude.ai connectors belong to the claude.ai account, so they stay per account: the gateway
+can't share them.
 
 ## How it works
 
@@ -142,8 +169,9 @@ and `~/.claude/plugins` into it. It also copies `enabledPlugins` and
 `extraKnownMarketplaces` from your `~/.claude/settings.json`, because Claude Code records
 whether a plugin is on in each account's settings, not in the plugins folder. It copies
 `mcpServers` from `~/.claude.json` the same way, so user-scope MCP servers reach every
-profile. Install a skill, plugin or MCP server once and every profile has it. A profile's
-other settings stay its own.
+profile, except the profile's own Alta and Fellow gateway servers (see
+[Which servers reach every account](#which-servers-reach-every-account)). Install a skill,
+plugin or MCP server once and every profile has it. A profile's other settings stay its own.
 
 **Swapping the default account (`cc-use`).** VS Code and plain `claude` use the default login:
 the `Claude Code-credentials` item in the macOS Keychain, plus the account details in

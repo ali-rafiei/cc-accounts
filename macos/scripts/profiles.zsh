@@ -171,16 +171,20 @@ _cc_usage_probe() {
 # Which plugins are on lives in settings.json, not the plugins dir, so those two keys are
 # mirrored from ~/.claude/settings.json into the profile's own settings on every launch.
 # User-scope MCP servers (mcpServers in ~/.claude.json) are mirrored the same way, so every
-# account gets the servers registered once with `claude mcp add --scope user`.
+# account gets the servers registered once with `claude mcp add --scope user`. A profile's
+# own gateway servers for the OAuth routes (mcp_gateway_setup.sh adds them) are kept over
+# the default login's server of the same name.
 _cc_share() {
   emulate -L zsh
   local item
   for item in skills plugins; do
     [[ -e "$1/$item" || -L "$1/$item" ]] || ln -s "$HOME/.claude/$item" "$1/$item"
   done
-  python3 - "$1" <<'EOF'
+  python3 - "$1" "$(_cc_base)" <<'EOF'
 import json, sys
 from pathlib import Path
+sys.path.insert(0, sys.argv[2])
+from mcp_gateway import OAUTH_UPSTREAMS, PORT
 SHARED = (  # (file under ~, file in the profile, keys copied)
     ('.claude/settings.json', 'settings.json', ('enabledPlugins', 'extraKnownMarketplaces')),
     ('.claude.json', '.claude.json', ('mcpServers',)),
@@ -200,6 +204,15 @@ for source_name, target_name, keys in SHARED:
         print(f'cc: {", ".join(keys)} not shared, could not read ({exc}): {source_path}, {target_path}', file=sys.stderr)
         continue
     merged = {**target, **{k: source[k] for k in keys if k in source}}
+    if isinstance(merged.get('mcpServers'), dict) and isinstance(target.get('mcpServers'), dict):
+        on_gateway = {
+            name: server
+            for name, server in target['mcpServers'].items()
+            if name in OAUTH_UPSTREAMS
+            and isinstance(server, dict)
+            and server.get('url') == f'http://127.0.0.1:{PORT}/{name}'
+        }
+        merged['mcpServers'] = {**merged['mcpServers'], **on_gateway}
     if merged != target:
         target_path.write_text(json.dumps(merged, indent=2) + '\n')
 EOF
