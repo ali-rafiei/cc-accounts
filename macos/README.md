@@ -143,9 +143,15 @@ use the one sign-in in the default login (sign in there with `/mcp`): they add i
 token, refresh it when it is due or the server answers 401, and write the result back,
 under the same lock directories Claude Code takes for an MCP refresh and a credentials
 write. The setup script registers both routes as user-scope servers in every profile, and
-`cc` keeps a profile's gateway servers when it copies the default login's list. Rerun the
-setup script after adding a profile. In a profile, Alta's tools are `mcp__forgefirst__*`;
-the `alta` plugin's own server there stays signed out.
+`cc` keeps the profile's `forgefirst` and `fellow` gateway servers when it copies the
+default login's list; every other server follows the default login. Rerun the setup script
+after adding a profile.
+
+In a profile session the gateway exposes Alta as `mcp__forgefirst__*`; the `alta` plugin's
+own server there stays signed out. The `alta` and `alta-review` skills (alta plugin 2.0.0)
+only look for `mcp__plugin_alta_forgefirst__*`, so today a profile session gets Alta's
+review only when the request names the `forgefirst` Hub server. Making it automatic needs a
+change to the alta plugin in the altaml plugin repo.
 
 claude.ai connectors belong to the claude.ai account, so they stay per account: the gateway
 can't share them.

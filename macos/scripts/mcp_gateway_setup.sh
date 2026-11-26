@@ -8,8 +8,8 @@
 # servers in every profile, so a profile session uses the default login's sign-in. The
 # default login keeps its own servers and is never changed. Rerun after adding a profile.
 set -e
-oauth_routes=(forgefirst fellow)
 dir="${0:A:h}"  # where install.sh put mcp_gateway.py
+oauth_routes=($(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import mcp_gateway; print(*mcp_gateway.OAUTH_UPSTREAMS)' "$dir"))
 plist="$HOME/Library/LaunchAgents/com.user.claude-mcp-gateway.plist"
 cat > "$plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>

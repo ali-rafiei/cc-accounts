@@ -149,6 +149,33 @@ def test__cc__keeps_the_profiles_own_gateway_servers_over_the_default_logins(hom
     assert config['mcpServers'] == {'rea': {}, **gateway_servers}
 
 
+def test__cc__mirrors_a_removed_or_moved_non_oauth_gateway_server_to_the_profile(home):
+    # Arrange: the default login moved linear off the gateway and removed github.
+    linear = {'type': 'http', 'url': 'https://mcp.linear.app/mcp'}
+    (home / '.claude.json').write_text(json.dumps({'mcpServers': {'linear': linear}}))
+    profile = home / '.claude-profiles' / 'work'
+    profile.mkdir()
+    fellow = {'type': 'http', 'url': 'http://127.0.0.1:8765/fellow'}
+    (profile / '.claude.json').write_text(
+        json.dumps(
+            {
+                'mcpServers': {
+                    'linear': {'type': 'http', 'url': 'http://127.0.0.1:8765/linear'},
+                    'github': {'type': 'http', 'url': 'http://127.0.0.1:8765/github'},
+                    'fellow': fellow,
+                }
+            }
+        )
+    )
+
+    # Act
+    _zsh('cc work', home)
+
+    # Assert: only the OAuth route stays the profile's own.
+    config = json.loads((profile / '.claude.json').read_text())
+    assert config['mcpServers'] == {'linear': linear, 'fellow': fellow}
+
+
 def test__mcp_gateway_setup__registers_the_oauth_routes_in_every_profile_only(home):
     # Arrange: stubs record each claude call with the config dir it ran under.
     (home / 'Library' / 'LaunchAgents').mkdir(parents=True)
