@@ -116,7 +116,8 @@ your MCP servers to every account instead:
   a request naming another host, or carrying a browser's `Origin` header, gets a 403, so a
   web page that rebinds its DNS name to `127.0.0.1` can't use your tokens.
 
-The gateway ships with routes for Linear and GitHub (`UPSTREAMS` in `mcp_gateway.py`):
+The gateway ships with token routes for Linear and GitHub (`UPSTREAMS` in `mcp_gateway.py`;
+its OAuth routes for Alta and Fellow are covered below):
 
 ```sh
 ~/.claude-profiles/mcp_gateway_setup.sh linear github   # start it at login, ask for each token
@@ -168,8 +169,9 @@ and `~/.claude/plugins` into it. It also copies `enabledPlugins` and
 `extraKnownMarketplaces` from your `~/.claude/settings.json`, because Claude Code records
 whether a plugin is on in each account's settings, not in the plugins folder. It copies
 `mcpServers` from `~/.claude.json` the same way, so user-scope MCP servers reach every
-profile. Install a skill, plugin or MCP server once and every profile has it. A profile's
-other settings stay its own.
+profile, except the profile's own Alta and Fellow gateway servers (see
+[Which servers reach every account](#which-servers-reach-every-account)). Install a skill,
+plugin or MCP server once and every profile has it. A profile's other settings stay its own.
 
 **Swapping the default account (`cc-use`).** VS Code and plain `claude` use the default login:
 the `Claude Code-credentials` item in the macOS Keychain, plus the account details in
